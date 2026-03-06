@@ -1,0 +1,6 @@
+ultralytics
+playwright
+pillow
+numpy
+torch
+transformers

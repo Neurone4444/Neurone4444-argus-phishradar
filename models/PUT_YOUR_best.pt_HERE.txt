@@ -1,0 +1,1 @@
+Copy your trained YOLO model here and rename it to best.pt
