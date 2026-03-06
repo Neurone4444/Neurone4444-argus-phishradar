@@ -32,10 +32,37 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
+import urllib.request
 
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_MODEL = BASE_DIR / "models" / "best.pt"
 DEFAULT_OUTPUT = BASE_DIR / "output"
+MODEL_URL = "https://github.com/Neurone4444/Neurone4444-argus-phishradar/releases/download/v1.0/best.pt"
+
+
+def ensure_default_model() -> str:
+    """Ensure the default YOLO model exists locally. Download it from GitHub Releases if missing."""
+    safe_mkdir(DEFAULT_MODEL.parent)
+
+    if DEFAULT_MODEL.exists():
+        return str(DEFAULT_MODEL)
+
+    print(f"[ARGUS] YOLO model not found at: {DEFAULT_MODEL}")
+    print("[ARGUS] Downloading best.pt from GitHub Release...")
+
+    try:
+        urllib.request.urlretrieve(MODEL_URL, str(DEFAULT_MODEL))
+    except Exception as e:
+        raise RuntimeError(
+            f"Unable to download YOLO model automatically from {MODEL_URL}. "
+            f"Download it manually and place it in models/best.pt. Error: {e}"
+        ) from e
+
+    if not DEFAULT_MODEL.exists():
+        raise RuntimeError("Model download completed but models/best.pt was not found.")
+
+    print(f"[ARGUS] Model downloaded successfully: {DEFAULT_MODEL}")
+    return str(DEFAULT_MODEL)
 
 # Optional: per annotare lo screenshot con box/circle/label
 try:
@@ -1493,7 +1520,7 @@ img{{max-width:100%;border-radius:12px;border:1px solid #233044}}
 def parse_args():
     ap = argparse.ArgumentParser(description="ARGUS PhishRadar Phishing Scanner (NO-API)")
     ap.add_argument("--url", required=True, help="URL da analizzare (live)")
-    ap.add_argument("--yolo-model", default=str(DEFAULT_MODEL), help=f"Path al modello YOLO (.pt) addestrato (default: {DEFAULT_MODEL})")
+    ap.add_argument("--yolo-model", default=None, help=f"Path al modello YOLO (.pt) addestrato. Se omesso, ARGUS usa {DEFAULT_MODEL} e lo scarica automaticamente se manca.")
     ap.add_argument("--out-dir", default=str(DEFAULT_OUTPUT), help=f"Cartella output (default: {DEFAULT_OUTPUT})")
     ap.add_argument("--headless", action="store_true", help="Esegue browser in headless (default: false)")
     ap.add_argument("--no-headless", action="store_true", help="Forza headless=false (utile per siti anti-bot)")
@@ -1570,7 +1597,13 @@ def main():
     banner()
     args = parse_args()
 
-    model_path = Path(args.yolo_model)
+    try:
+        resolved_model = args.yolo_model if args.yolo_model else ensure_default_model()
+    except Exception as e:
+        print(f"❌ {e}")
+        return 2
+
+    model_path = Path(resolved_model)
     if not model_path.exists():
         print(f"❌ YOLO model not found: {model_path}")
         print("Place your model at models/best.pt or pass --yolo-model <path>")
@@ -1611,7 +1644,7 @@ def main():
         print("⚠️  Interstitial/WAF hint: sembra una pagina di blocco (es. Cloudflare 'Suspected Phishing').")
 
     # YOLO
-    results = run_yolo(args.yolo_model, str(tmp_png), imgsz=args.imgsz, conf=args.conf, iou=args.iou)
+    results = run_yolo(str(model_path), str(tmp_png), imgsz=args.imgsz, conf=args.conf, iou=args.iou)
 
     detections = []
     for r in results:
@@ -1736,7 +1769,7 @@ def main():
     if ref_path is not None:
         try:
             # YOLO sul riferimento
-            ref_results = run_yolo(args.yolo_model, str(ref_path), imgsz=args.imgsz, conf=args.conf, iou=args.iou)
+            ref_results = run_yolo(str(model_path), str(ref_path), imgsz=args.imgsz, conf=args.conf, iou=args.iou)
             ref_dets = []
             for r in ref_results:
                 names = r.names if hasattr(r, "names") else {}
