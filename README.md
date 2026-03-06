@@ -9,7 +9,17 @@
 - annotated screenshots
 - HTML and JSON reporting
 
+- ## Example Detection
+![ARGUS Detection](https://github.com/user-attachments/assets/0ca03e8a-4092-49ea-ac60-0788f9695b21)
+
 ARGUS PhishRadar does not rely only on URL reputation or blacklists. It inspects how a page **looks** and how it is **structured** to identify phishing login pages, credential harvesting flows and brand impersonation.
+
+## Visual Detection (YOLO)
+
+Annotated login page showing detected phishing UI elements such as login fields, buttons and password inputs.
+
+![Annotated Login Detection](https://github.com/user-attachments/assets/9d59e313-3945-410c-93e9-517109da025b)
+
 
 ## Features
 
@@ -22,6 +32,12 @@ ARGUS PhishRadar does not rely only on URL reputation or blacklists. It inspects
 - annotated screenshots
 - HTML dashboard and JSON reports
 - DOM-aware false-positive reduction
+
+## Final Analysis Report
+
+ARGUS generates a full HTML report combining visual detection, DOM intelligence and risk scoring.
+
+![Phishing Analysis Report](https://github.com/user-attachments/assets/52143ab3-225b-4b1c-ac47-d69215cb4f33)
 
 ## YOLO Model Classes
 
@@ -48,6 +64,8 @@ The included custom model detects 21 phishing-related classes:
 - `suspicious_banner`
 - `captcha`
 - `2fa_field`
+
+  
 
 ## Repository Layout
 
