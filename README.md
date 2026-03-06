@@ -1,6 +1,6 @@
 # ARGUS PhishRadar
 
-**Visual phishing detection engine** that combines:
+# Visual phishing detection engine for detecting phishing pages and correlating related phishing campaigns that combines:
 
 - YOLO UI object detection
 - DOM intelligence
@@ -12,7 +12,7 @@
 - ## Example Detection
 ![ARGUS Detection](https://github.com/user-attachments/assets/0ca03e8a-4092-49ea-ac60-0788f9695b21)
 
-ARGUS PhishRadar does not rely only on URL reputation or blacklists. It inspects how a page **looks** and how it is **structured** to identify phishing login pages, credential harvesting flows and brand impersonation.
+ARGUS PhishRadar does not rely only on URL reputation or blacklists. It inspects how a page **looks** and how it is **structured** to identify phishing login pages, credential harvesting flows, brand impersonation and correlate related phishing campaigns.
 
 ## Visual Detection (YOLO)
 
@@ -33,6 +33,22 @@ Annotated login page showing detected phishing UI elements such as login fields,
 - HTML dashboard and JSON reports
 - DOM-aware false-positive reduction
 
+## Phishing Campaign Correlation
+
+ARGUS PhishRadar can help identify phishing campaigns that reuse the same phishing kit or infrastructure.
+
+The scanner extracts structural fingerprints including:
+
+- layout fingerprint (relative positions of login elements)
+- visual palette
+- perceptual screenshot hash
+- detected UI components
+- brand impersonation signals
+- reused UI structures across domains
+
+These signals allow analysts to cluster phishing pages that likely originate from the same phishing kit or campaign infrastructure.
+
+The optional `layout_fingerprint.json` output can be used to compare multiple scans and identify structural similarities across different domains.
 ## Final Analysis Report
 
 ARGUS generates a full HTML report combining visual detection, DOM intelligence and risk scoring.
@@ -85,77 +101,81 @@ argus-phishradar/
 
 Clone the repository:
 
-```bash
-git clone https://github.com/YOURUSER/argus-phishradar.git
-cd argus-phishradar
-```
+
+git clone https://github.com/Neurone4444/Neurone4444-argus-phishradar.git
+cd Neurone4444-argus-phishradar
+
+Yolo Model:
+
 
 Install dependencies:
 
-```bash
 pip install -r requirements.txt
 python -m playwright install chromium
-```
 
-The scanner expects the model at:
 
-```text
+## YOLO Model
+
+ARGUS PhishRadar uses a custom YOLO model trained to detect phishing UI components.
+
+The model download is handled automatically by the scanner.
+
+If `models/best.pt` is not found, the script will automatically download the model from the GitHub Releases section on first run.
+
+The model will be saved to:
+
 models/best.pt
-```
 
-You can also provide a custom model path with `--yolo-model`.
+You can also provide a custom model manually:
+
+python argus_phishradar.py --url "https://example.com" --yolo-model path/to/model.pt
 
 ## Basic Usage
 
-```bash
 python argus_phishradar.py --url "https://example.com"
-```
+
 
 ## Recommended Deep Scan
 
-```bash
 python argus_phishradar.py --url "https://example.com" --clip --filter-anomalous-boxes --save-layout-json --no-headless --wait 3.5 --open
-```
+
 
 ## Real Examples
 
 Legitimate site:
 
-```bash
 python argus_phishradar.py --url "https://www.redhotcyber.com" --clip --filter-anomalous-boxes --save-layout-json --no-headless --wait 3.5
-```
+
 
 Suspicious Microsoft-like phishing page:
 
-```bash
+
 python argus_phishradar.py --url "http://www.busanopen.org/office/msgvoice/source/Login.php" --clip --filter-anomalous-boxes --save-layout-json --no-headless --wait 3.5
 ```
 
 Facebook-like phishing page on free hosting:
 
-```bash
 python argus_phishradar.py --url "https://facebooklogin12732771.github.io/facebook_/index.html" --clip --filter-anomalous-boxes --save-layout-json --no-headless --wait 3.5
-```
+
 
 ## Useful Options
 
 Show all CLI options:
 
-```bash
 python argus_phishradar.py --help
-```
+
 
 Compare a suspicious page with a reference page:
 
-```bash
+
 python argus_phishradar.py --url "https://suspicious-site.com" --ref-url "https://legitimate-site.com" --clip --save-layout-json --no-headless
 ```
 
 Force a second login step:
 
-```bash
+
 python argus_phishradar.py --url "https://target.com" --step2-email test@example.com --clip --no-headless
-```
+
 
 ## Output
 
