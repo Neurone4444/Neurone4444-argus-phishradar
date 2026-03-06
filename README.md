@@ -101,11 +101,8 @@ argus-phishradar/
 
 Clone the repository:
 
-
 git clone https://github.com/Neurone4444/Neurone4444-argus-phishradar.git
 cd Neurone4444-argus-phishradar
-
-Yolo Model:
 
 
 Install dependencies:
@@ -114,19 +111,21 @@ pip install -r requirements.txt
 python -m playwright install chromium
 
 
-## YOLO Model
+YOLO Model
 
-ARGUS PhishRadar uses a custom YOLO model trained to detect phishing UI components.
+ARGUS PhishRadar uses a custom YOLO model to detect phishing UI elements.
 
-The model download is handled automatically by the scanner.
+If the model is missing, you can download it from the project release:
 
-If `models/best.pt` is not found, the script will automatically download the model from the GitHub Releases section on first run.
+https://github.com/Neurone4444/Neurone4444-argus-phishradar/releases/download/v1.0/best.pt
 
-The model will be saved to:
+
+Place the model in:
 
 models/best.pt
 
-You can also provide a custom model manually:
+
+Alternatively you can pass a custom model path:
 
 python argus_phishradar.py --url "https://example.com" --yolo-model path/to/model.pt
 
