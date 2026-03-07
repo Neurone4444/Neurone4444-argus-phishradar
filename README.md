@@ -50,7 +50,7 @@ ARGUS integrates several analysis layers:
 - IP clustering of related phishing infrastructure
 - Campaign graph generation for visual investigation
 
-<img width="1607" height="815" alt="fsdfdsffsdfsfd" src="https://github.com/user-attachments/assets/42e29303-7fee-49ac-921d-fac9588a5ed8" />
+
 
 
 # Example Detection
@@ -65,6 +65,11 @@ Instead it evaluates:
 - infrastructure relationships
 
 This allows detection of previously unseen phishing pages.
+
+<img width="1569" height="914" alt="afsdfdffsdfsfdsfdfdf" src="https://github.com/user-attachments/assets/5ac154cb-c1ee-4044-9b2b-03840504dcbd" />
+
+<img width="1607" height="815" alt="fsdfdsffsdfsfd" src="https://github.com/user-attachments/assets/6bb237ad-36ef-41dc-afa4-37054a242f4c" />
+
 
 ---
 
