@@ -123,7 +123,6 @@ Suspicious domains can be automatically analyzed with the visual engine.
 <img width="1609" height="799" alt="ghdhdhdhdhdhdhdhdhdgdgh" src="https://github.com/user-attachments/assets/5383d1c9-0cc7-4329-8ed3-caf4c98c6c04" />
 
 ---
-<img width="852" height="640" alt="sadasadasddasdas" src="https://github.com/user-attachments/assets/5cd701d7-5f9d-45bc-9fca-f037b2f874de" />
 
 <img width="1569" height="914" alt="afsdfdffsdfsfdsfdfdf" src="https://github.com/user-attachments/assets/a02a2155-8fbc-4d00-80c4-819c3df580ff" />
 
