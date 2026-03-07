@@ -129,8 +129,6 @@ Suspicious domains can be automatically analyzed with the visual engine.
 
 ---
 
-<img width="1569" height="914" alt="afsdfdffsdfsfdsfdfdf" src="https://github.com/user-attachments/assets/a02a2155-8fbc-4d00-80c4-819c3df580ff" />
-
 # Example Workflow
 
 Example campaign discovery targeting Microsoft:
