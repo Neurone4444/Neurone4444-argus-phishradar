@@ -1,216 +1,249 @@
 # ARGUS PhishRadar
 
-# Visual phishing detection engine for detecting phishing pages and correlating related phishing campaigns that combines:
+Visual phishing detection and campaign intelligence engine.
 
-- YOLO UI object detection
-- DOM intelligence
-- CLIP brand recognition
-- layout fingerprinting
-- annotated screenshots
-- HTML and JSON reporting
+ARGUS PhishRadar is a security research tool designed to analyze suspicious webpages, detect phishing login interfaces, and correlate related phishing infrastructure across multiple domains.
 
-- ## Example Detection
-![ARGUS Detection](https://github.com/user-attachments/assets/0ca03e8a-4092-49ea-ac60-0788f9695b21)
-
-ARGUS PhishRadar does not rely only on URL reputation or blacklists. It inspects how a page **looks** and how it is **structured** to identify phishing login pages, credential harvesting flows, brand impersonation and correlate related phishing campaigns.
-
-## Visual Detection (YOLO)
-
-Annotated login page showing detected phishing UI elements such as login fields, buttons and password inputs.
-
-![Annotated Login Detection](https://github.com/user-attachments/assets/9d59e313-3945-410c-93e9-517109da025b)
+The engine combines visual analysis, DOM intelligence and infrastructure correlation to help security analysts identify credential harvesting pages and uncover related phishing campaigns.
 
 
-## Features
+<img width="940" height="620" alt="sdsaadsasdasdasad" src="https://github.com/user-attachments/assets/95870195-d063-443e-b64a-840b84d108e4" />
 
-- Live webpage screenshot acquisition with Playwright
-- Detection of phishing-oriented UI elements with a custom YOLO model
-- DOM extraction of forms, inputs, scripts and links
+---
+
+# Core Capabilities
+
+ARGUS integrates several analysis layers:
+
+## Visual phishing detection
+- Custom YOLO model trained to detect phishing-oriented UI elements
+- Detection of login forms, password fields, 2FA prompts and security banners
+- Annotated screenshots highlighting suspicious UI components
+
+## DOM intelligence
+- Extraction of forms, inputs, scripts and links
+- Identification of credential harvesting flows
+- Detection of suspicious form actions and hidden inputs
+
+## Brand impersonation detection
 - CLIP-based brand recognition
-- brand/domain mismatch analysis
-- layout fingerprinting for phishing-kit clustering
-- annotated screenshots
-- HTML dashboard and JSON reports
-- DOM-aware false-positive reduction
+- Brand/domain mismatch analysis
+- Detection of common impersonation targets (Microsoft, Google, PayPal, etc.)
 
-## Phishing Campaign Correlation
+## Layout fingerprinting
+- Structural fingerprint based on UI element positioning
+- Detection of reused phishing kits across domains
+- Clustering of visually similar phishing pages
 
-ARGUS PhishRadar can help identify phishing campaigns that reuse the same phishing kit or infrastructure.
+## OCR-assisted semantic validation (optional)
+- OCR can extract text from detected UI elements
+- Helps reduce visual false positives
+- Allows semantic validation of detected login fields
 
-The scanner extracts structural fingerprints including:
+## Phishing campaign discovery
+- Automated typosquat domain generation
+- Detection of plausible phishing domains targeting a brand
+- HTTP probing of candidate domains
 
-- layout fingerprint (relative positions of login elements)
-- visual palette
-- perceptual screenshot hash
-- detected UI components
+## Infrastructure intelligence
+- Resolution of discovered domains
+- IP clustering of related phishing infrastructure
+- Campaign graph generation for visual investigation
+
+<img width="1607" height="815" alt="fsdfdsffsdfsfd" src="https://github.com/user-attachments/assets/42e29303-7fee-49ac-921d-fac9588a5ed8" />
+
+
+# Example Detection
+
+ARGUS performs analysis without relying only on URL reputation lists or blocklists.
+
+Instead it evaluates:
+
+- visual structure of the page
+- DOM layout and credential inputs
 - brand impersonation signals
-- reused UI structures across domains
+- infrastructure relationships
 
-These signals allow analysts to cluster phishing pages that likely originate from the same phishing kit or campaign infrastructure.
+This allows detection of previously unseen phishing pages.
 
-The optional `layout_fingerprint.json` output can be used to compare multiple scans and identify structural similarities across different domains.
-## Final Analysis Report
+---
 
-ARGUS generates a full HTML report combining visual detection, DOM intelligence and risk scoring.
+# Visual Detection (YOLO)
 
-![Phishing Analysis Report](https://github.com/user-attachments/assets/52143ab3-225b-4b1c-ac47-d69215cb4f33)
+The custom YOLO model detects phishing-oriented UI elements including:
 
-## YOLO Model Classes
+- login forms
+- username fields
+- password inputs
+- authentication buttons
+- brand logos
+- CAPTCHA elements
+- 2FA prompts
+- security warning banners
 
-The included custom model detects 21 phishing-related classes:
+Detected elements are rendered on annotated screenshots to assist investigation.
 
-- `login_form`
-- `username_field`
-- `password_field`
-- `login_button`
-- `forgot_password_link`
-- `remember_me_checkbox`
-- `logo_facebook`
-- `logo_google`
-- `logo_microsoft`
-- `logo_paypal`
-- `logo_amazon`
-- `logo_apple`
-- `logo_netflix`
-- `logo_instagram`
-- `logo_twitter`
-- `logo_linkedin`
-- `security_alert`
-- `fake_certificate`
-- `suspicious_banner`
-- `captcha`
-- `2fa_field`
+<img width="1383" height="817" alt="sfdfadsfsfsdsfsdfdsf" src="https://github.com/user-attachments/assets/d3e400ab-2554-4504-952a-f9f0b681544d" />
 
-  
+---
 
-## Repository Layout
+# Phishing Campaign Correlation
 
-```text
+ARGUS can identify infrastructure reuse across phishing domains.
+
+Signals used for correlation include:
+
+- layout fingerprints
+- perceptual screenshot hashes
+- visual palette similarity
+- detected UI elements
+- favicon fingerprints
+- hosting infrastructure clustering
+
+These signals allow analysts to group domains likely belonging to the same phishing kit or campaign.
+
+---
+
+# Campaign Discovery Engine
+
+ARGUS includes a campaign discovery module capable of identifying suspicious domains targeting a brand.
+
+The engine performs:
+
+1. typosquat generation  
+2. domain probing  
+3. live host identification  
+4. infrastructure clustering  
+
+Suspicious domains can be automatically analyzed with the visual engine.
+
+<img width="1678" height="962" alt="dsfdfssdfsdfsdfsfsdfdsdsf" src="https://github.com/user-attachments/assets/51faca0b-4f44-46f3-b28b-6c7e397f5bab" />
+
+
+<img width="1609" height="799" alt="ghdhdhdhdhdhdhdhdhdgdgh" src="https://github.com/user-attachments/assets/5383d1c9-0cc7-4329-8ed3-caf4c98c6c04" />
+
+---
+<img width="852" height="640" alt="sadasadasddasdas" src="https://github.com/user-attachments/assets/5cd701d7-5f9d-45bc-9fca-f037b2f874de" />
+
+<img width="1569" height="914" alt="afsdfdffsdfsfdsfdfdf" src="https://github.com/user-attachments/assets/a02a2155-8fbc-4d00-80c4-819c3df580ff" />
+
+# Example Workflow
+
+Example campaign discovery targeting Microsoft:
+
+python argus_phishradar.py --campaign-intel microsoft
+
+# Example phishing page analysis:
+
+python argus_phishradar.py --url "http://example-phishing-site.com"
+
+#  Deep visual analysis:
+
+python argus_phishradar.py --url "http://example-phishing-site.com" --clip --filter-anomalous-boxes --save-layout-json --no-headless --wait 3
+
+# Repository Layout
+
 argus-phishradar/
 ├── argus_phishradar.py
+├── argus_argus_phishradar.py
+├── argus_layout_cluster.py
 ├── requirements.txt
 ├── README.md
-├── LICENSE
-├── .gitignore
 ├── models/
 │   └── best.pt
 └── output/
-```
 
-## Installation
+#  Installation
 
 Clone the repository:
-
 git clone https://github.com/Neurone4444/Neurone4444-argus-phishradar.git
 cd Neurone4444-argus-phishradar
 
-
 Install dependencies:
-
 pip install -r requirements.txt
 python -m playwright install chromium
 
+#  Optional OCR Support
 
-YOLO Model
+ARGUS can use OCR to extract text from detected UI elements and reduce visual false positives.
 
-ARGUS PhishRadar uses a custom YOLO model to detect phishing UI elements.
+Install OCR support:
+pip install pytesseract
 
-If the model is missing, you can download it from the project release:
+#  Install Tesseract
 
+Windows:
+
+Download and install Tesseract OCR and add it to the system PATH.
+
+Verify installation:
+tesseract --version
+If OCR is not installed, ARGUS still works normally but OCR-assisted validation will be unavailable.
+
+#  YOLO Model
+
+ARGUS uses a custom YOLO model trained to detect phishing-related UI components.
+
+If the model is missing, download it from the release page:
 https://github.com/Neurone4444/Neurone4444-argus-phishradar/releases/download/v1.0/best.pt
-
-
-Place the model in:
-
+Place it in:
 models/best.pt
-
-
-Alternatively you can pass a custom model path:
-
+Or provide a custom model path:
 python argus_phishradar.py --url "https://example.com" --yolo-model path/to/model.pt
 
-## Basic Usage
+#  Campaign Discovery Commands
 
-python argus_phishradar.py --url "https://example.com"
+Search for domains potentially impersonating a brand:
+python argus_phishradar.py --campaign-intel microsoft
 
+Show only reachable domains:
+python argus_phishradar.py --campaign-intel microsoft --live-only
 
-## Recommended Deep Scan
+Automatically analyze suspicious domains:
+python argus_phishradar.py --campaign-intel microsoft --live-only --auto-analyze
 
-python argus_phishradar.py --url "https://example.com" --clip --filter-anomalous-boxes --save-layout-json --no-headless --wait 3.5 --open
+Open generated reports automatically:
+python argus_phishradar.py --campaign-intel microsoft --live-only --auto-analyze --open-reports
 
+#  Example Campaign Searches
 
-## Real Examples
+python argus_phishradar.py --campaign-intel microsoft
+python argus_phishradar.py --campaign-intel google
+python argus_phishradar.py --campaign-intel paypal
+python argus_phishradar.py --campaign-intel netflix
 
-Legitimate site:
+#  Output
 
-python argus_phishradar.py --url "https://www.redhotcyber.com" --clip --filter-anomalous-boxes --save-layout-json --no-headless --wait 3.5
+ARGUS generates:
 
+HTML analysis dashboard
 
-Suspicious Microsoft-like phishing page:
+JSON report
 
+original screenshot
 
-python argus_phishradar.py --url "http://www.busanopen.org/office/msgvoice/source/Login.php" --clip --filter-anomalous-boxes --save-layout-json --no-headless --wait 3.5
-```
+annotated screenshot
 
-Facebook-like phishing page on free hosting:
+layout fingerprint JSON
 
-python argus_phishradar.py --url "https://facebooklogin12732771.github.io/facebook_/index.html" --clip --filter-anomalous-boxes --save-layout-json --no-headless --wait 3.5
-
-
-## Useful Options
-
-Show all CLI options:
-
-python argus_phishradar.py --help
-
-
-Compare a suspicious page with a reference page:
-
-
-python argus_phishradar.py --url "https://suspicious-site.com" --ref-url "https://legitimate-site.com" --clip --save-layout-json --no-headless
-```
-
-Force a second login step:
-
-
-python argus_phishradar.py --url "https://target.com" --step2-email test@example.com --clip --no-headless
-
-
-## Output
-
-ARGUS PhishRadar generates:
-
-- JSON report
-- HTML dashboard
-- original screenshot
-- annotated screenshot
-- optional layout fingerprint JSON
+campaign infrastructure graph
 
 Default output directory:
 
-```text
 output/
-```
 
-## GitHub Description
+#  Disclaimer
 
-Use this as the short repository description:
+This project is intended for:
 
-> Visual phishing detection engine combining YOLO UI detection, DOM intelligence, layout fingerprinting and brand recognition.
+cybersecurity research
 
-## Suggested GitHub Topics
+phishing detection
 
-- phishing
-- cybersecurity
-- osint
-- yolo
-- computer-vision
-- threat-intelligence
-- dom-analysis
-- security-tools
+training
 
-## Disclaimer
+authorized security analysis
 
-This project is intended for defensive security research, phishing detection, training and authorized analysis only.
+Campaign discovery identifies suspicious infrastructure but does not automatically prove phishing activity.
 
-The author is not responsible for misuse.
+The author is not responsible for misuse of this software.
