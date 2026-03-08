@@ -225,6 +225,17 @@ python argus_phishradar.py --campaign-intel microsoft
 
 python argus_phishradar.py --url "http://example-phishing-site.com"
 
+#  Batch analysis of multiple URLs
+
+Multiple targets can be analyzed using a shell loop
+Windows (CMD):
+for %d in (https://example.com https://.com http://www.example.org) do python argus_phishradar.py --url "%d"
+
+Linux / macOS:
+for d in https://example.com https://example2.com http://www.example.org; do
+python argus_phishradar.py --url "$d"
+done
+
 #  Deep visual analysis:
 
 python argus_phishradar.py --url "http://example-phishing-site.com" --clip --filter-anomalous-boxes --save-layout-json --no-headless --wait 3
