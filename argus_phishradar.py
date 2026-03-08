@@ -1,5 +1,6 @@
 import html
 import sys
+import re
 
 # =========================================================
 # ARGUS Threat-Intel Edition (STRICT + LIVE + CLASSIFIER)
@@ -11,7 +12,10 @@ import sys
 
 import requests
 import subprocess
+import socket
+import ssl
 from collections import defaultdict
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 try:
@@ -52,11 +56,471 @@ SUSPICIOUS_PATTERNS = [
 
 COMMON_TLDS = ["com","net","org","co","info"]
 
+
+PHISHING_KEYWORDS = {
+    "login", "signin", "sign-in", "secure", "verify", "verification",
+    "account", "update", "auth", "password", "support", "billing",
+    "payment", "wallet", "recover", "restore", "unlock", "confirm",
+    "security", "help", "service", "webscr", "checkpoint", "sso"
+}
+
+ACTION_TOKENS = {
+    "login", "signin", "sign-in", "verify", "verification", "confirm",
+    "unlock", "restore", "recover", "reset", "review", "validate",
+    "authenticate", "reauth", "resume", "check", "update"
+}
+
+ACCOUNT_TOKENS = {
+    "account", "profile", "security", "password", "credential", "credentials",
+    "identity", "access", "wallet", "billing", "payment", "invoice",
+    "member", "customer", "client", "portal"
+}
+
+CASEWORK_TOKENS = {
+    "resolution", "center", "centre", "case", "dispute", "claim", "appeal",
+    "limitation", "limited", "restriction", "restricted", "hold", "suspended",
+    "suspend", "restore", "confirm", "review", "compliance", "kyc", "remedy"
+}
+
+DELIVERY_TOKENS = {
+    "support", "service", "help", "desk", "member", "customer", "client",
+    "portal", "care", "assist", "notice", "alert"
+}
+
+INFRA_SUSPICION_TOKENS = {
+    "auth", "sso", "secure", "webscr", "session", "token", "gateway",
+    "validation", "validate", "update"
+}
+
+LOW_SIGNAL_CONTEXT_TOKENS = {
+    "about", "community", "blog", "news", "press", "media", "help",
+    "docs", "developer", "developers", "events", "careers", "careers",
+    "status", "learn", "academy", "supportcenter"
+}
+
+PARTNER_MARKETING_TOKENS = {
+    "partners", "partner", "community", "events", "promo", "marketing", "campaign",
+    "affiliate", "loyalty", "rewards", "offers", "offer", "newsroom", "press"
+}
+
+REMEDIATION_HINT_TOKENS = {
+    "about", "info", "community", "help", "status", "support", "notice",
+    "security", "response", "incident", "trust", "safe", "protection"
+}
+
+SUSPICIOUS_TLDS = {
+    "top", "xyz", "click", "site", "online", "info", "live", "shop",
+    "support", "cloud", "rest", "icu", "buzz", "monster", "cam", "cfd"
+}
+
+OFFICIAL_PARTNER_LIKE_ROOTS = {
+    "paypal.at",
+    "paypalcredit.com",
+    "paypalgivingfund.org",
+    "paypal.me",
+}
+
+OFFICIAL_PARTNER_LIKE_PREFIXES = (
+    "business.paypal.",
+    "merchant.paypal.",
+    "m.paypal.",
+    "donate.paypal.",
+    "www.paypal.",
+)
+
+INCOHERENT_BRAND_TOKENS = {
+    "casino", "casinos", "bet", "bets", "gambling", "poker", "slots",
+    "dating", "adult", "porn", "sex", "xxx", "escort", "loan", "forex"
+}
+
+def _ti_tokenize_label(value: str) -> list[str]:
+    return [x for x in re.split(r"[^a-z0-9]+", (value or "").lower()) if x]
+
+def _ti_brand_forms(brand: str) -> set[str]:
+    brand = (brand or "").lower().strip()
+    if not brand:
+        return set()
+    forms = {brand}
+    compact = re.sub(r"[^a-z0-9]", "", brand)
+    if compact:
+        forms.add(compact)
+    if len(compact) > 4:
+        forms.add(compact.replace("o", "0"))
+        forms.add(compact.replace("l", "1"))
+    return {x for x in forms if x}
+
+def _ti_domain_semantic_profile(domain: str, brand: str) -> dict:
+    d = _ti_normalize_domain(domain)
+    reg = _ti_get_registrable_domain(d)
+    reg_no_tld = _ti_get_reg_no_tld(d)
+    tokens = set(_ti_tokenize_label(reg_no_tld))
+    brand_forms = _ti_brand_forms(brand)
+    tld = reg.rsplit(".", 1)[-1].lower() if "." in reg else ""
+    brand_hit = any(b and b in reg_no_tld for b in brand_forms)
+    typoish = any(
+        b and (
+            b + b[-1] in reg_no_tld or
+            (reg_no_tld.replace("0", "o") != reg_no_tld and b in reg_no_tld.replace("0", "o")) or
+            (reg_no_tld.replace("1", "l") != reg_no_tld and b in reg_no_tld.replace("1", "l"))
+        )
+        for b in brand_forms if len(b) >= 3
+    )
+    action_hits = tokens & ACTION_TOKENS
+    account_hits = tokens & ACCOUNT_TOKENS
+    casework_hits = tokens & CASEWORK_TOKENS
+    delivery_hits = tokens & DELIVERY_TOKENS
+    infra_hits = tokens & INFRA_SUSPICION_TOKENS
+    low_signal_hits = tokens & LOW_SIGNAL_CONTEXT_TOKENS
+    partner_hits = tokens & PARTNER_MARKETING_TOKENS
+    remediation_hits = tokens & REMEDIATION_HINT_TOKENS
+    phishing_hits = tokens & PHISHING_KEYWORDS
+    suspicious_tld = tld in SUSPICIOUS_TLDS
+    separator_style = "-" in reg_no_tld or d.count(".") >= 2
+    strong_signal = bool(action_hits or account_hits or casework_hits or infra_hits or phishing_hits)
+    medium_signal_count = sum(bool(x) for x in [delivery_hits, suspicious_tld, typoish, separator_style])
+    likely_noise = bool(low_signal_hits or partner_hits) and not strong_signal
+    return {
+        "domain": d,
+        "reg": reg,
+        "reg_no_tld": reg_no_tld,
+        "tokens": tokens,
+        "tld": tld,
+        "brand_hit": brand_hit,
+        "typoish": typoish,
+        "action_hits": action_hits,
+        "account_hits": account_hits,
+        "casework_hits": casework_hits,
+        "delivery_hits": delivery_hits,
+        "infra_hits": infra_hits,
+        "low_signal_hits": low_signal_hits,
+        "partner_hits": partner_hits,
+        "remediation_hits": remediation_hits,
+        "phishing_hits": phishing_hits,
+        "suspicious_tld": suspicious_tld,
+        "separator_style": separator_style,
+        "strong_signal": strong_signal,
+        "medium_signal_count": medium_signal_count,
+        "likely_noise": likely_noise,
+    }
+
+def plausible_dynamic_campaign_domain(domain: str, brand: str) -> bool:
+    d = _ti_normalize_domain(domain)
+    if not d or "@" in d or " " in d or "/" in d or "." not in d:
+        return False
+    if "\n" in d or "\r" in d or "," in d:
+        return False
+    if not _ti_looks_like_fqdn(d):
+        return False
+
+    profile = _ti_domain_semantic_profile(d, brand)
+    reg = profile["reg"]
+    reg_no_tld = profile["reg_no_tld"]
+    tokens = profile["tokens"]
+
+    official_extra = {
+        "paypalobjects.com",
+        "paypalcorp.com",
+        "paypal-media.com",
+    }
+
+    if reg in OFFICIAL_ROOTS:
+        return False
+    if d.endswith(".paypal.com") or d == "paypal.com":
+        return False
+    if reg in official_extra or any(d.endswith("." + x) for x in official_extra):
+        return False
+    if reg in OFFICIAL_PARTNER_LIKE_ROOTS:
+        return False
+    if any(d.startswith(p) for p in OFFICIAL_PARTNER_LIKE_PREFIXES):
+        return False
+    if any(k in d for k in NOISE_KEYWORDS):
+        return False
+    if any(s in reg_no_tld for s in OFFICIAL_SUBSTRINGS):
+        return False
+    if not profile["brand_hit"]:
+        return False
+    if tokens & INCOHERENT_BRAND_TOKENS:
+        return False
+
+    if profile["likely_noise"] and not profile["typoish"] and not profile["suspicious_tld"]:
+        return False
+
+    strong_signal = profile["strong_signal"]
+    weak_combo = profile["medium_signal_count"] >= 2
+    finance_casework_combo = bool(profile["casework_hits"] and (profile["delivery_hits"] or profile["account_hits"]))
+
+    return strong_signal or weak_combo or finance_casework_combo
+
+def query_urlscan_domains(keyword: str, limit: int = 50) -> list[str]:
+    print(f"[ARGUS URLSCAN] Searching urlscan for: {keyword}")
+    headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+    queries = [
+        f"domain:{keyword}",
+        f'page.domain:"{keyword}"',
+        f'task.url:"{keyword}"'
+    ]
+    found = set()
+    for q in queries:
+        try:
+            url = f"https://urlscan.io/api/v1/search/?q={requests.utils.quote(q)}&size={int(max(1, min(limit, 100)))}"
+            r = requests.get(url, timeout=25, headers=headers)
+            if r.status_code != 200:
+                continue
+            data = r.json() or {}
+            for item in data.get("results", [])[:limit]:
+                for key in ("page", "task"):
+                    block = item.get(key) or {}
+                    for field in ("domain", "apexDomain"):
+                        d = _ti_normalize_domain(block.get(field, ""))
+                        if d:
+                            found.add(d)
+                for entry in (item.get("domains") or []):
+                    d = _ti_normalize_domain(entry)
+                    if d:
+                        found.add(d)
+        except Exception as e:
+            print(f"[ARGUS URLSCAN] query failed for {q}: {e}")
+    print(f"[ARGUS URLSCAN] Results: {len(found)} raw domains")
+    return sorted(found)
+
+def query_domain_age_days(domain: str):
+    """
+    Best-effort RDAP age check.
+    Returns age in days if creation/registration date is available, else None.
+    """
+    d = _ti_normalize_domain(domain)
+    if not d:
+        return None
+
+    urls = [
+        f"https://rdap.org/domain/{d}",
+        f"https://rdap.verisign.com/com/v1/domain/{d}" if d.endswith(".com") else None,
+        f"https://rdap.verisign.com/net/v1/domain/{d}" if d.endswith(".net") else None,
+    ]
+    urls = [u for u in urls if u]
+
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "application/json"
+    }
+
+    for url in urls:
+        try:
+            r = requests.get(url, timeout=20, headers=headers)
+            if r.status_code != 200:
+                continue
+            data = r.json() or {}
+
+            candidates = []
+
+            for ev in data.get("events", []) or []:
+                action = str(ev.get("eventAction", "")).lower()
+                date_str = ev.get("eventDate")
+                if action in {"registration", "registered", "creation"} and date_str:
+                    candidates.append(date_str)
+
+            for key in ("creationDate", "created", "registered"):
+                if data.get(key):
+                    candidates.append(data[key])
+
+            for ds in candidates:
+                try:
+                    ds = str(ds).replace("Z", "+00:00")
+                    dt = datetime.fromisoformat(ds)
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    age = (datetime.now(timezone.utc) - dt).days
+                    if age >= 0:
+                        return age
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    return None
+
+
+def score_dynamic_candidate(domain: str, brand: str):
+    d = _ti_normalize_domain(domain)
+    profile = _ti_domain_semantic_profile(d, brand)
+    reg = profile["reg"]
+    reg_no_tld = profile["reg_no_tld"]
+    tokens = profile["tokens"]
+    tld = profile["tld"]
+
+    reasons = []
+    score = 0
+    intent_score = 0
+    abuse_score = 0
+    context_penalty = 0
+
+    official_extra = {
+        "paypalobjects.com",
+        "paypalcorp.com",
+        "paypal-media.com",
+    }
+
+    if not _ti_looks_like_fqdn(d):
+        return {
+            "domain": d,
+            "score": -100,
+            "reasons": ["invalid fqdn"],
+            "age_days": None,
+            "intent_score": 0,
+            "abuse_score": -100,
+            "operational_score": 0,
+        }
+
+    if (
+        reg in OFFICIAL_ROOTS
+        or d.endswith(".paypal.com")
+        or d == "paypal.com"
+        or reg in official_extra
+        or any(d.endswith("." + x) for x in official_extra)
+        or reg in OFFICIAL_PARTNER_LIKE_ROOTS
+        or any(d.startswith(p) for p in OFFICIAL_PARTNER_LIKE_PREFIXES)
+    ):
+        return {
+            "domain": d,
+            "score": -50,
+            "reasons": ["official asset"],
+            "age_days": None,
+            "intent_score": 0,
+            "abuse_score": -50,
+            "operational_score": 0,
+        }
+
+    if profile["brand_hit"]:
+        abuse_score += 20
+        reasons.append("brand exact")
+
+    if profile["phishing_hits"]:
+        intent_score += 18
+        reasons.append("phishing tokens")
+
+    if profile["action_hits"]:
+        intent_score += 12
+        reasons.append("action tokens")
+
+    if profile["account_hits"]:
+        intent_score += 10
+        reasons.append("account tokens")
+
+    if profile["casework_hits"]:
+        intent_score += 20
+        reasons.append("casework tokens")
+
+    if profile["delivery_hits"]:
+        intent_score += 6
+        reasons.append("service tokens")
+
+    if profile["infra_hits"]:
+        intent_score += 8
+        reasons.append("infra/auth tokens")
+
+    if profile["casework_hits"] and (profile["delivery_hits"] or profile["account_hits"]):
+        intent_score += 10
+        reasons.append("casework+account combo")
+
+    if profile["suspicious_tld"]:
+        abuse_score += 10
+        reasons.append("suspicious tld")
+
+    incoherent_hits = tokens & INCOHERENT_BRAND_TOKENS
+    if incoherent_hits:
+        context_penalty -= 25
+        reasons.append("incoherent brand context")
+
+    if profile["typoish"]:
+        abuse_score += 15
+        reasons.append("brand typo")
+
+    if profile["separator_style"] and (profile["strong_signal"] or profile["suspicious_tld"]):
+        abuse_score += 4
+        reasons.append("crafted separator style")
+
+    if profile["low_signal_hits"] and not profile["strong_signal"]:
+        context_penalty -= 10
+        reasons.append("low-signal brand context")
+
+    if profile["partner_hits"] and not profile["strong_signal"]:
+        context_penalty -= 12
+        reasons.append("partner/marketing context")
+
+    age_days = query_domain_age_days(d)
+    operational_score = 0
+    if age_days is not None:
+        if age_days <= 7:
+            operational_score += 25
+            reasons.append(f"very new domain ({age_days}d)")
+        elif age_days <= 30:
+            operational_score += 18
+            reasons.append(f"new domain ({age_days}d)")
+        elif age_days <= 90:
+            operational_score += 10
+            reasons.append(f"recent domain ({age_days}d)")
+
+    if not profile["strong_signal"] and age_days is None and tld not in SUSPICIOUS_TLDS:
+        context_penalty -= 10
+        reasons.append("weak phishing context")
+
+    score = intent_score + abuse_score + operational_score + context_penalty
+
+    return {
+        "domain": d,
+        "score": score,
+        "reasons": reasons,
+        "age_days": age_days,
+        "intent_score": intent_score,
+        "abuse_score": abuse_score + context_penalty,
+        "operational_score": operational_score,
+    }
+
+def dynamic_campaign_discovery(keyword: str, limit: int = 50) -> dict:
+    brand = (keyword or "").strip().lower()
+    ct_domains = ct_discovery(brand)
+    urlscan_domains = query_urlscan_domains(brand, limit=limit)
+    combined = sorted(set(ct_domains) | set(urlscan_domains))
+
+    scored = []
+    filtered = []
+    rejected = 0
+    for d in combined:
+        if plausible_dynamic_campaign_domain(d, brand):
+            filtered.append(_ti_normalize_domain(d))
+            scored.append(score_dynamic_candidate(d, brand))
+        else:
+            rejected += 1
+
+    scored.sort(key=lambda x: x.get("score", 0), reverse=True)
+
+    return {
+        "ct_domains": sorted(set(ct_domains)),
+        "urlscan_domains": sorted(set(urlscan_domains)),
+        "combined": combined,
+        "filtered": sorted(set(filtered)),
+        "scored": scored,
+        "rejected": rejected,
+    }
+
+
 def _ti_normalize_domain(domain: str) -> str:
     d = (domain or "").strip().lower()
     d = d.replace("*.", "").strip(".")
     d = d.split("/")[0]
+    d = d.split("\\n")[0].split("\n")[0].strip()
+    d = d.split(",")[0].strip()
+    d = d.replace(" ", "")
     return d
+
+def _ti_looks_like_fqdn(domain: str) -> bool:
+    if not domain or len(domain) > 253:
+        return False
+    if "." not in domain:
+        return False
+    if domain.startswith("-") or domain.endswith("-"):
+        return False
+    return bool(re.fullmatch(r"[a-z0-9.-]+\.[a-z]{2,}", domain))
 
 def _ti_get_registrable_domain(domain: str) -> str:
     d = _ti_normalize_domain(domain)
@@ -157,21 +621,73 @@ def plausible_phishing(domain, brand):
 
 def check_http_alive(domain, timeout=4):
     domain = _ti_normalize_domain(domain)
-    for scheme in ("http://", "https://"):
+    out = {
+        "domain": domain,
+        "status": None,
+        "final_url": None,
+        "class_hint": None,
+        "scheme": None,
+        "dns_ips": [],
+        "peer_ip": None,
+        "server": None,
+        "location": None,
+        "ok": False,
+        "redirect_chain": [],
+    }
+
+    try:
+        infos = socket.getaddrinfo(domain, None)
+        seen_ips = []
+        for item in infos:
+            ip = item[4][0]
+            if ip not in seen_ips:
+                seen_ips.append(ip)
+        out["dns_ips"] = seen_ips[:8]
+    except Exception:
+        out["dns_ips"] = []
+
+    session = requests.Session()
+    headers = {"User-Agent": "Mozilla/5.0"}
+    for scheme in ("https://", "http://"):
         url = scheme + domain
         try:
-            r = requests.get(url, timeout=timeout, headers={"User-Agent": "Mozilla/5.0"}, allow_redirects=True)
-            if 200 <= r.status_code < 400:
-                return r.status_code, r.url
+            r = session.get(url, timeout=timeout, headers=headers, allow_redirects=True, verify=False, stream=True)
+            out["redirect_chain"] = [resp.url for resp in (list(r.history) + [r]) if getattr(resp, "url", None)]
+            status = int(r.status_code)
+            out["status"] = status
+            out["final_url"] = r.url
+            out["scheme"] = scheme.rstrip(":/")
+            out["server"] = r.headers.get("Server")
+            out["location"] = r.headers.get("Location")
+            out["ok"] = 200 <= status < 400
+            try:
+                conn = getattr(r.raw, "_connection", None)
+                sock = getattr(conn, "sock", None) if conn else None
+                if sock and hasattr(sock, "getpeername"):
+                    peer = sock.getpeername()
+                    if isinstance(peer, tuple) and peer:
+                        out["peer_ip"] = peer[0]
+            except Exception:
+                pass
+            try:
+                r.close()
+            except Exception:
+                pass
+            if out["ok"]:
+                return out
         except Exception:
-            pass
-    return None, None
+            continue
+    return out
 
 def classify_final_url(domain: str, final_url: str, brand: str) -> str:
     """
-    suspicious
-    redirect_to_official
+    active_phishing_candidate
+    redirect_official_clean
+    redirect_official_possible_remediation
+    redirect_official_possible_brand_protection
     parking_or_generic
+    likely_partner_or_campaign_site
+    brand_abuse_unclear
     """
     analyzed = _ti_normalize_domain(domain)
     if not final_url:
@@ -180,22 +696,11 @@ def classify_final_url(domain: str, final_url: str, brand: str) -> str:
     parsed = urlparse(final_url.strip())
     final_host = _ti_normalize_domain(parsed.netloc or "")
     final_url_l = final_url.strip().lower()
-
-    if final_host == analyzed:
-        generic_markers = [
-            "sedo", "bodis", "dan.com", "afternic", "for-sale",
-            "buy-this-domain", "coming-soon", "parking"
-        ]
-        if any(m in final_url_l for m in generic_markers):
-            return "parking_or_generic"
-        return "suspicious"
-
-    if final_host in OFFICIAL_ROOTS or any(final_host.endswith("." + x) for x in OFFICIAL_ROOTS):
-        return "redirect_to_official"
-    if f"support.{brand}.com" in final_host or final_host == f"www.{brand}.com" or final_host == f"{brand}.com":
-        return "redirect_to_official"
-    if any(s in final_host for s in OFFICIAL_SUBSTRINGS):
-        return "redirect_to_official"
+    domain_profile = _ti_domain_semantic_profile(analyzed, brand)
+    final_profile = _ti_domain_semantic_profile(final_host, brand) if final_host else {
+        "tokens": set(), "remediation_hits": set(), "partner_hits": set(), "low_signal_hits": set(),
+        "strong_signal": False
+    }
 
     generic_markers = [
         "sedo", "bodis", "dan.com", "afternic", "for-sale",
@@ -204,7 +709,37 @@ def classify_final_url(domain: str, final_url: str, brand: str) -> str:
     if any(m in final_url_l for m in generic_markers):
         return "parking_or_generic"
 
-    return "suspicious"
+    if final_host == analyzed:
+        if domain_profile["partner_hits"] and not domain_profile["strong_signal"]:
+            return "likely_partner_or_campaign_site"
+        if domain_profile["low_signal_hits"] and not domain_profile["strong_signal"]:
+            return "brand_abuse_unclear"
+        return "active_phishing_candidate"
+
+    redirects_to_official = (
+        final_host in OFFICIAL_ROOTS
+        or any(final_host.endswith("." + x) for x in OFFICIAL_ROOTS)
+        or f"support.{brand}.com" in final_host
+        or final_host == f"www.{brand}.com"
+        or final_host == f"{brand}.com"
+        or any(s in final_host for s in OFFICIAL_SUBSTRINGS)
+    )
+
+    if redirects_to_official:
+        if domain_profile["partner_hits"] or final_profile.get("partner_hits"):
+            return "redirect_official_clean"
+        if domain_profile["remediation_hits"] or final_profile.get("remediation_hits"):
+            return "redirect_official_possible_remediation"
+        if domain_profile["low_signal_hits"] and not domain_profile["strong_signal"]:
+            return "redirect_official_possible_brand_protection"
+        return "redirect_official_clean"
+
+    if domain_profile["partner_hits"] and not domain_profile["strong_signal"]:
+        return "likely_partner_or_campaign_site"
+    if domain_profile["low_signal_hits"] and not domain_profile["strong_signal"]:
+        return "brand_abuse_unclear"
+
+    return "active_phishing_candidate"
 
 def favicon_hash(url):
     if not mmh3:
@@ -224,13 +759,27 @@ def favicon_hash(url):
 
 def cluster_infrastructure(domains):
     clusters = defaultdict(list)
-    for d in domains:
-        try:
-            ip = socket.gethostbyname(d)
-        except Exception:
+    for item in domains:
+        if isinstance(item, dict):
+            d = _ti_normalize_domain(item.get("domain") or item.get("host") or "")
+            ip = item.get("peer_ip") or ((item.get("dns_ips") or [None])[0])
+        elif isinstance(item, (list, tuple)) and item:
+            d = _ti_normalize_domain(item[0])
             ip = None
+        else:
+            d = _ti_normalize_domain(str(item or ""))
+            ip = None
+
+        if not d:
+            continue
+        if not ip:
+            try:
+                ip = socket.gethostbyname(d)
+            except Exception:
+                ip = None
         if ip:
-            clusters[ip].append(d)
+            if d not in clusters[ip]:
+                clusters[ip].append(d)
     return clusters
 
 def generate_graph(clusters, outfile="argus_campaign_graph.html"):
@@ -251,17 +800,31 @@ def generate_graph(clusters, outfile="argus_campaign_graph.html"):
     net.write_html(outfile, open_browser=False)
     print("[ARGUS] Graph saved:", outfile)
 
-def argus_campaign_intel(keyword, live_only=False, auto_analyze=False, open_reports=False):
+def argus_campaign_intel(keyword, live_only=False, auto_analyze=False, open_reports=False, dynamic_discovery=True, dynamic_limit=50):
     brand = keyword.strip().lower()
 
     ct_domains = ct_discovery(brand)
     generated = generate_typosquat_candidates(brand)
-    raw = sorted(set(ct_domains) | set(generated))
+
+    dynamic = {
+        "ct_domains": [],
+        "urlscan_domains": [],
+        "combined": [],
+        "filtered": [],
+        "rejected": 0,
+    }
+    if dynamic_discovery:
+        try:
+            dynamic = dynamic_campaign_discovery(brand, limit=dynamic_limit)
+        except Exception as e:
+            print(f"[ARGUS DYNAMIC] discovery failed: {e}")
+
+    raw = sorted(set(ct_domains) | set(generated) | set(dynamic.get("combined", [])))
 
     filtered = []
     rejected = 0
     for d in raw:
-        if plausible_phishing(d, brand):
+        if plausible_phishing(d, brand) or plausible_dynamic_campaign_domain(d, brand):
             filtered.append(_ti_normalize_domain(d))
         else:
             rejected += 1
@@ -271,23 +834,39 @@ def argus_campaign_intel(keyword, live_only=False, auto_analyze=False, open_repo
     suspicious_live = []
     redirect_live = []
     parking_live = []
+    context_live = []
 
     if live_only:
         print("\n[ARGUS] Probing plausible phishing domains...\n")
         for d in filtered:
-            status, final_url = check_http_alive(d)
+            probe = check_http_alive(d)
+            status = probe.get("status")
+            final_url = probe.get("final_url")
             if status:
                 cls = classify_final_url(d, final_url, brand)
-                item = (d, status, final_url, cls)
+                item = {
+                    "domain": d,
+                    "status": status,
+                    "final_url": final_url,
+                    "class": cls,
+                    "peer_ip": probe.get("peer_ip"),
+                    "dns_ips": probe.get("dns_ips") or [],
+                    "scheme": probe.get("scheme"),
+                    "redirect_chain": probe.get("redirect_chain") or [],
+                }
                 live_results.append(item)
-                if cls == "suspicious":
+                if cls == "active_phishing_candidate":
                     suspicious_live.append(item)
-                elif cls == "redirect_to_official":
+                elif cls.startswith("redirect_official"):
                     redirect_live.append(item)
-                else:
+                elif cls in {"parking_or_generic"}:
                     parking_live.append(item)
+                else:
+                    context_live.append(item)
 
     print(f"\n[ARGUS] Raw domains from CT: {len(ct_domains)}")
+    print(f"[ARGUS] Dynamic CT/urlscan candidates: {len(dynamic.get('combined', []))}")
+    print(f"[ARGUS] Dynamic filtered candidates: {len(dynamic.get('filtered', []))}")
     print(f"[ARGUS] Generated typosquat candidates: {len(generated)}")
     print(f"[ARGUS] Combined candidates: {len(raw)}")
     print(f"[ARGUS] Rejected as legit/noise: {rejected}")
@@ -299,29 +878,45 @@ def argus_campaign_intel(keyword, live_only=False, auto_analyze=False, open_repo
         for d in filtered:
             print(" -", d)
 
+    if dynamic.get("scored"):
+        print("\n[ARGUS] Top dynamic candidates\n")
+        for item in dynamic.get("scored", [])[:15]:
+            print(f" - {item['domain']} | score={item['score']} | age={item.get('age_days')} | reasons: {', '.join(item.get('reasons', []))}")
+
     if live_only:
         print("\n[ARGUS] Live suspicious domains\n")
         if not suspicious_live:
             print("None")
         else:
-            for d, status, final_url, _ in suspicious_live:
-                print(f" - {d} [{status}] -> {final_url}")
+            for item in suspicious_live:
+                ip_note = item.get("peer_ip") or ", ".join(item.get("dns_ips") or []) or "no-ip"
+                print(f" - {item['domain']} [{item['status']}] -> {item['final_url']} | ip={ip_note}")
 
-        print("\n[ARGUS] Redirect to official / likely brand protection\n")
+        print("\n[ARGUS] Redirect to official / remediation / protection\n")
         if not redirect_live:
             print("None")
         else:
-            for d, status, final_url, _ in redirect_live:
-                print(f" - {d} [{status}] -> {final_url}")
+            for item in redirect_live:
+                ip_note = item.get("peer_ip") or ", ".join(item.get("dns_ips") or []) or "no-ip"
+                print(f" - {item['domain']} [{item['status']}] -> {item['final_url']} | {item['class']} | ip={ip_note}")
+
+        print("\n[ARGUS] Brand-context / partner / unclear\n")
+        if not context_live:
+            print("None")
+        else:
+            for item in context_live:
+                ip_note = item.get("peer_ip") or ", ".join(item.get("dns_ips") or []) or "no-ip"
+                print(f" - {item['domain']} [{item['status']}] -> {item['final_url']} | {item['class']} | ip={ip_note}")
 
         print("\n[ARGUS] Parking / generic\n")
         if not parking_live:
             print("None")
         else:
-            for d, status, final_url, _ in parking_live:
-                print(f" - {d} [{status}] -> {final_url}")
+            for item in parking_live:
+                ip_note = item.get("peer_ip") or ", ".join(item.get("dns_ips") or []) or "no-ip"
+                print(f" - {item['domain']} [{item['status']}] -> {item['final_url']} | ip={ip_note}")
 
-    cluster_input = [d for d, _, _, _ in suspicious_live] if live_only else filtered
+    cluster_input = suspicious_live if live_only else filtered
     clusters = cluster_infrastructure(cluster_input)
 
     print("\n[ARGUS] Infrastructure clusters\n")
@@ -336,7 +931,7 @@ def argus_campaign_intel(keyword, live_only=False, auto_analyze=False, open_repo
     if live_only and suspicious_live:
         try:
             print("\n[ARGUS] Favicon pivot (first suspicious live)\n")
-            favicon_hash(suspicious_live[0][2])
+            favicon_hash(suspicious_live[0].get("final_url"))
         except Exception:
             pass
 
@@ -362,7 +957,11 @@ def auto_analyze_suspicious_domains(suspicious_live, *, open_reports=False, max_
 
     count = 0
     for item in suspicious_live[:max_domains]:
-        d, status, final_url, _cls = item
+        if isinstance(item, dict):
+            d = item.get("domain")
+            final_url = item.get("final_url")
+        else:
+            d, status, final_url, _cls = item
         target_url = final_url or f"http://{d}"
         cmd = [
             sys.executable,
@@ -389,18 +988,27 @@ if "--campaign-intel" in sys.argv:
     try:
         keyword = sys.argv[sys.argv.index("--campaign-intel")+1]
     except Exception:
-        print("Usage: --campaign-intel <brand> [--live-only] [--auto-analyze] [--open-reports]")
+        print("Usage: --campaign-intel <brand> [--live-only] [--auto-analyze] [--open-reports] [--no-dynamic] [--dynamic-limit N]")
         sys.exit()
 
     live_only = "--live-only" in sys.argv
     auto_analyze = "--auto-analyze" in sys.argv
     open_reports = "--open-reports" in sys.argv
+    dynamic_discovery = "--no-dynamic" not in sys.argv
+    dynamic_limit = 50
+    if "--dynamic-limit" in sys.argv:
+        try:
+            dynamic_limit = int(sys.argv[sys.argv.index("--dynamic-limit") + 1])
+        except Exception:
+            dynamic_limit = 50
 
     argus_campaign_intel(
         keyword,
         live_only=live_only,
         auto_analyze=auto_analyze,
-        open_reports=open_reports
+        open_reports=open_reports,
+        dynamic_discovery=dynamic_discovery,
+        dynamic_limit=dynamic_limit
     )
     sys.exit()
 
