@@ -258,11 +258,6 @@ paypal-login-secure.info | score=68 | reasons: brand exact, phishing tokens, sus
 secure-paypal-account.net | score=61 | reasons: brand exact, phishing tokens
 verify-paypal-login.top | score=58 | reasons: brand exact, suspicious tld
 
-[ARGUS] Top dynamic candidates
-
-paypal-login-secure.info | score=68 | reasons: brand exact, phishing tokens, suspicious tld
-secure-paypal-account.net | score=61 | reasons: brand exact, phishing tokens
-verify-paypal-login.top | score=58 | reasons: brand exact, suspicious tld
 
 Discover phishing infrastructure for a brand:
 
