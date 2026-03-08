@@ -2,6 +2,8 @@
 
 Visual phishing detection and campaign intelligence engine.
 
+Keywords: phishing detection, threat intelligence, OSINT, phishing infrastructure discovery, brand abuse detection, certificate transparency monitoring
+
 ARGUS PhishRadar is a security research tool designed to analyze suspicious webpages, detect phishing login interfaces, and correlate related phishing infrastructure across multiple domains.
 
 The engine combines visual analysis, DOM intelligence and infrastructure correlation to help security analysts identify credential harvesting pages and uncover related phishing campaigns.
@@ -142,6 +144,52 @@ python argus_phishradar.py --url "http://example-phishing-site.com"
 #  Deep visual analysis:
 
 python argus_phishradar.py --url "http://example-phishing-site.com" --clip --filter-anomalous-boxes --save-layout-json --no-headless --wait 3
+
+### Campaign Intelligence
+
+ARGUS can automatically discover phishing infrastructure related to a brand.
+
+Sources used:
+
+- Certificate Transparency logs (crt.sh)
+- urlscan.io public scans
+- Dynamic typosquat generation
+- Domain age analysis via RDAP
+
+The engine filters official assets and ranks candidates using a phishing likelihood score.
+
+Example:
+
+python argus_phishradar.py --campaign-intel paypal --live-only
+
+### Dynamic Candidate Ranking
+
+Domains discovered through CT logs and urlscan are scored based on:
+
+- brand presence in domain
+- phishing keywords (login, verify, secure, account, password)
+- suspicious TLDs
+- domain age (recent registrations increase score)
+- typo patterns
+- contextual anomalies
+
+Official assets and known partner domains are automatically excluded.
+
+Example output:
+
+[ARGUS] Top dynamic candidates
+
+paypal-login-secure.info | score=68 | reasons: brand exact, phishing tokens, suspicious tld
+secure-paypal-account.net | score=61 | reasons: brand exact, phishing tokens
+verify-paypal-login.top | score=58 | reasons: brand exact, suspicious tld
+
+Discover phishing infrastructure for a brand:
+
+python argus_phishradar.py --campaign-intel <brand>
+
+Example:
+
+python argus_phishradar.py --campaign-intel paypal --live-only
 
 # Repository Layout
 
