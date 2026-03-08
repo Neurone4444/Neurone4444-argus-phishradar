@@ -1,6 +1,7 @@
 import html
 import sys
 import re
+import hashlib
 
 # =========================================================
 # ARGUS Threat-Intel Edition (STRICT + LIVE + CLASSIFIER)
@@ -11,11 +12,10 @@ import re
 # =========================================================
 
 import requests
+import urllib3
 import subprocess
-import socket
-import ssl
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 from collections import defaultdict
-from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 try:
@@ -64,192 +64,43 @@ PHISHING_KEYWORDS = {
     "security", "help", "service", "webscr", "checkpoint", "sso"
 }
 
-ACTION_TOKENS = {
-    "login", "signin", "sign-in", "verify", "verification", "confirm",
-    "unlock", "restore", "recover", "reset", "review", "validate",
-    "authenticate", "reauth", "resume", "check", "update"
-}
-
-ACCOUNT_TOKENS = {
-    "account", "profile", "security", "password", "credential", "credentials",
-    "identity", "access", "wallet", "billing", "payment", "invoice",
-    "member", "customer", "client", "portal"
-}
-
-CASEWORK_TOKENS = {
-    "resolution", "center", "centre", "case", "dispute", "claim", "appeal",
-    "limitation", "limited", "restriction", "restricted", "hold", "suspended",
-    "suspend", "restore", "confirm", "review", "compliance", "kyc", "remedy"
-}
-
-DELIVERY_TOKENS = {
-    "support", "service", "help", "desk", "member", "customer", "client",
-    "portal", "care", "assist", "notice", "alert"
-}
-
-INFRA_SUSPICION_TOKENS = {
-    "auth", "sso", "secure", "webscr", "session", "token", "gateway",
-    "validation", "validate", "update"
-}
-
-LOW_SIGNAL_CONTEXT_TOKENS = {
-    "about", "community", "blog", "news", "press", "media", "help",
-    "docs", "developer", "developers", "events", "careers", "careers",
-    "status", "learn", "academy", "supportcenter"
-}
-
-PARTNER_MARKETING_TOKENS = {
-    "partners", "partner", "community", "events", "promo", "marketing", "campaign",
-    "affiliate", "loyalty", "rewards", "offers", "offer", "newsroom", "press"
-}
-
-REMEDIATION_HINT_TOKENS = {
-    "about", "info", "community", "help", "status", "support", "notice",
-    "security", "response", "incident", "trust", "safe", "protection"
-}
-
 SUSPICIOUS_TLDS = {
     "top", "xyz", "click", "site", "online", "info", "live", "shop",
     "support", "cloud", "rest", "icu", "buzz", "monster", "cam", "cfd"
 }
 
-OFFICIAL_PARTNER_LIKE_ROOTS = {
-    "paypal.at",
-    "paypalcredit.com",
-    "paypalgivingfund.org",
-    "paypal.me",
-}
-
-OFFICIAL_PARTNER_LIKE_PREFIXES = (
-    "business.paypal.",
-    "merchant.paypal.",
-    "m.paypal.",
-    "donate.paypal.",
-    "www.paypal.",
-)
-
-INCOHERENT_BRAND_TOKENS = {
-    "casino", "casinos", "bet", "bets", "gambling", "poker", "slots",
-    "dating", "adult", "porn", "sex", "xxx", "escort", "loan", "forex"
-}
-
 def _ti_tokenize_label(value: str) -> list[str]:
     return [x for x in re.split(r"[^a-z0-9]+", (value or "").lower()) if x]
-
-def _ti_brand_forms(brand: str) -> set[str]:
-    brand = (brand or "").lower().strip()
-    if not brand:
-        return set()
-    forms = {brand}
-    compact = re.sub(r"[^a-z0-9]", "", brand)
-    if compact:
-        forms.add(compact)
-    if len(compact) > 4:
-        forms.add(compact.replace("o", "0"))
-        forms.add(compact.replace("l", "1"))
-    return {x for x in forms if x}
-
-def _ti_domain_semantic_profile(domain: str, brand: str) -> dict:
-    d = _ti_normalize_domain(domain)
-    reg = _ti_get_registrable_domain(d)
-    reg_no_tld = _ti_get_reg_no_tld(d)
-    tokens = set(_ti_tokenize_label(reg_no_tld))
-    brand_forms = _ti_brand_forms(brand)
-    tld = reg.rsplit(".", 1)[-1].lower() if "." in reg else ""
-    brand_hit = any(b and b in reg_no_tld for b in brand_forms)
-    typoish = any(
-        b and (
-            b + b[-1] in reg_no_tld or
-            (reg_no_tld.replace("0", "o") != reg_no_tld and b in reg_no_tld.replace("0", "o")) or
-            (reg_no_tld.replace("1", "l") != reg_no_tld and b in reg_no_tld.replace("1", "l"))
-        )
-        for b in brand_forms if len(b) >= 3
-    )
-    action_hits = tokens & ACTION_TOKENS
-    account_hits = tokens & ACCOUNT_TOKENS
-    casework_hits = tokens & CASEWORK_TOKENS
-    delivery_hits = tokens & DELIVERY_TOKENS
-    infra_hits = tokens & INFRA_SUSPICION_TOKENS
-    low_signal_hits = tokens & LOW_SIGNAL_CONTEXT_TOKENS
-    partner_hits = tokens & PARTNER_MARKETING_TOKENS
-    remediation_hits = tokens & REMEDIATION_HINT_TOKENS
-    phishing_hits = tokens & PHISHING_KEYWORDS
-    suspicious_tld = tld in SUSPICIOUS_TLDS
-    separator_style = "-" in reg_no_tld or d.count(".") >= 2
-    strong_signal = bool(action_hits or account_hits or casework_hits or infra_hits or phishing_hits)
-    medium_signal_count = sum(bool(x) for x in [delivery_hits, suspicious_tld, typoish, separator_style])
-    likely_noise = bool(low_signal_hits or partner_hits) and not strong_signal
-    return {
-        "domain": d,
-        "reg": reg,
-        "reg_no_tld": reg_no_tld,
-        "tokens": tokens,
-        "tld": tld,
-        "brand_hit": brand_hit,
-        "typoish": typoish,
-        "action_hits": action_hits,
-        "account_hits": account_hits,
-        "casework_hits": casework_hits,
-        "delivery_hits": delivery_hits,
-        "infra_hits": infra_hits,
-        "low_signal_hits": low_signal_hits,
-        "partner_hits": partner_hits,
-        "remediation_hits": remediation_hits,
-        "phishing_hits": phishing_hits,
-        "suspicious_tld": suspicious_tld,
-        "separator_style": separator_style,
-        "strong_signal": strong_signal,
-        "medium_signal_count": medium_signal_count,
-        "likely_noise": likely_noise,
-    }
 
 def plausible_dynamic_campaign_domain(domain: str, brand: str) -> bool:
     d = _ti_normalize_domain(domain)
     if not d or "@" in d or " " in d or "/" in d or "." not in d:
         return False
-    if "\n" in d or "\r" in d or "," in d:
-        return False
-    if not _ti_looks_like_fqdn(d):
-        return False
 
-    profile = _ti_domain_semantic_profile(d, brand)
-    reg = profile["reg"]
-    reg_no_tld = profile["reg_no_tld"]
-    tokens = profile["tokens"]
-
-    official_extra = {
-        "paypalobjects.com",
-        "paypalcorp.com",
-        "paypal-media.com",
-    }
+    reg = _ti_get_registrable_domain(d)
+    reg_no_tld = _ti_get_reg_no_tld(d)
+    tokens = set(_ti_tokenize_label(reg_no_tld))
+    tld = reg.rsplit(".", 1)[-1].lower() if "." in reg else ""
 
     if reg in OFFICIAL_ROOTS:
-        return False
-    if d.endswith(".paypal.com") or d == "paypal.com":
-        return False
-    if reg in official_extra or any(d.endswith("." + x) for x in official_extra):
-        return False
-    if reg in OFFICIAL_PARTNER_LIKE_ROOTS:
-        return False
-    if any(d.startswith(p) for p in OFFICIAL_PARTNER_LIKE_PREFIXES):
         return False
     if any(k in d for k in NOISE_KEYWORDS):
         return False
     if any(s in reg_no_tld for s in OFFICIAL_SUBSTRINGS):
         return False
-    if not profile["brand_hit"]:
-        return False
-    if tokens & INCOHERENT_BRAND_TOKENS:
+    if brand not in reg_no_tld:
         return False
 
-    if profile["likely_noise"] and not profile["typoish"] and not profile["suspicious_tld"]:
-        return False
+    typoish = (
+        brand + brand[-1] in reg_no_tld or
+        (reg_no_tld.replace("0", "o") != reg_no_tld and brand in reg_no_tld.replace("0", "o")) or
+        (reg_no_tld.replace("1", "l") != reg_no_tld and brand in reg_no_tld.replace("1", "l"))
+    )
+    phishing_token_hit = bool(tokens & PHISHING_KEYWORDS)
+    separator_style = "-" in reg_no_tld or "." in d
+    suspicious_tld = tld in SUSPICIOUS_TLDS
 
-    strong_signal = profile["strong_signal"]
-    weak_combo = profile["medium_signal_count"] >= 2
-    finance_casework_combo = bool(profile["casework_hits"] and (profile["delivery_hits"] or profile["account_hits"]))
-
-    return strong_signal or weak_combo or finance_casework_combo
+    return phishing_token_hit or typoish or suspicious_tld or separator_style
 
 def query_urlscan_domains(keyword: str, limit: int = 50) -> list[str]:
     print(f"[ARGUS URLSCAN] Searching urlscan for: {keyword}")
@@ -342,138 +193,52 @@ def query_domain_age_days(domain: str):
 
 def score_dynamic_candidate(domain: str, brand: str):
     d = _ti_normalize_domain(domain)
-    profile = _ti_domain_semantic_profile(d, brand)
-    reg = profile["reg"]
-    reg_no_tld = profile["reg_no_tld"]
-    tokens = profile["tokens"]
-    tld = profile["tld"]
+    reg = _ti_get_registrable_domain(d)
+    reg_no_tld = _ti_get_reg_no_tld(d)
+    tokens = set(_ti_tokenize_label(reg_no_tld))
+    tld = reg.rsplit(".", 1)[-1].lower() if "." in reg else ""
 
     reasons = []
     score = 0
-    intent_score = 0
-    abuse_score = 0
-    context_penalty = 0
 
-    official_extra = {
-        "paypalobjects.com",
-        "paypalcorp.com",
-        "paypal-media.com",
-    }
-
-    if not _ti_looks_like_fqdn(d):
-        return {
-            "domain": d,
-            "score": -100,
-            "reasons": ["invalid fqdn"],
-            "age_days": None,
-            "intent_score": 0,
-            "abuse_score": -100,
-            "operational_score": 0,
-        }
-
-    if (
-        reg in OFFICIAL_ROOTS
-        or d.endswith(".paypal.com")
-        or d == "paypal.com"
-        or reg in official_extra
-        or any(d.endswith("." + x) for x in official_extra)
-        or reg in OFFICIAL_PARTNER_LIKE_ROOTS
-        or any(d.startswith(p) for p in OFFICIAL_PARTNER_LIKE_PREFIXES)
-    ):
-        return {
-            "domain": d,
-            "score": -50,
-            "reasons": ["official asset"],
-            "age_days": None,
-            "intent_score": 0,
-            "abuse_score": -50,
-            "operational_score": 0,
-        }
-
-    if profile["brand_hit"]:
-        abuse_score += 20
+    if brand in reg_no_tld:
+        score += 20
         reasons.append("brand exact")
 
-    if profile["phishing_hits"]:
-        intent_score += 18
+    if tokens & PHISHING_KEYWORDS:
+        score += 20
         reasons.append("phishing tokens")
 
-    if profile["action_hits"]:
-        intent_score += 12
-        reasons.append("action tokens")
-
-    if profile["account_hits"]:
-        intent_score += 10
-        reasons.append("account tokens")
-
-    if profile["casework_hits"]:
-        intent_score += 20
-        reasons.append("casework tokens")
-
-    if profile["delivery_hits"]:
-        intent_score += 6
-        reasons.append("service tokens")
-
-    if profile["infra_hits"]:
-        intent_score += 8
-        reasons.append("infra/auth tokens")
-
-    if profile["casework_hits"] and (profile["delivery_hits"] or profile["account_hits"]):
-        intent_score += 10
-        reasons.append("casework+account combo")
-
-    if profile["suspicious_tld"]:
-        abuse_score += 10
+    if tld in SUSPICIOUS_TLDS:
+        score += 10
         reasons.append("suspicious tld")
 
-    incoherent_hits = tokens & INCOHERENT_BRAND_TOKENS
-    if incoherent_hits:
-        context_penalty -= 25
-        reasons.append("incoherent brand context")
-
-    if profile["typoish"]:
-        abuse_score += 15
+    typoish = (
+        brand + brand[-1] in reg_no_tld or
+        (reg_no_tld.replace("0", "o") != reg_no_tld and brand in reg_no_tld.replace("0", "o")) or
+        (reg_no_tld.replace("1", "l") != reg_no_tld and brand in reg_no_tld.replace("1", "l"))
+    )
+    if typoish:
+        score += 15
         reasons.append("brand typo")
 
-    if profile["separator_style"] and (profile["strong_signal"] or profile["suspicious_tld"]):
-        abuse_score += 4
-        reasons.append("crafted separator style")
-
-    if profile["low_signal_hits"] and not profile["strong_signal"]:
-        context_penalty -= 10
-        reasons.append("low-signal brand context")
-
-    if profile["partner_hits"] and not profile["strong_signal"]:
-        context_penalty -= 12
-        reasons.append("partner/marketing context")
-
     age_days = query_domain_age_days(d)
-    operational_score = 0
     if age_days is not None:
         if age_days <= 7:
-            operational_score += 25
+            score += 25
             reasons.append(f"very new domain ({age_days}d)")
         elif age_days <= 30:
-            operational_score += 18
+            score += 18
             reasons.append(f"new domain ({age_days}d)")
         elif age_days <= 90:
-            operational_score += 10
+            score += 10
             reasons.append(f"recent domain ({age_days}d)")
-
-    if not profile["strong_signal"] and age_days is None and tld not in SUSPICIOUS_TLDS:
-        context_penalty -= 10
-        reasons.append("weak phishing context")
-
-    score = intent_score + abuse_score + operational_score + context_penalty
 
     return {
         "domain": d,
         "score": score,
         "reasons": reasons,
         "age_days": age_days,
-        "intent_score": intent_score,
-        "abuse_score": abuse_score + context_penalty,
-        "operational_score": operational_score,
     }
 
 def dynamic_campaign_discovery(keyword: str, limit: int = 50) -> dict:
@@ -508,19 +273,7 @@ def _ti_normalize_domain(domain: str) -> str:
     d = (domain or "").strip().lower()
     d = d.replace("*.", "").strip(".")
     d = d.split("/")[0]
-    d = d.split("\\n")[0].split("\n")[0].strip()
-    d = d.split(",")[0].strip()
-    d = d.replace(" ", "")
     return d
-
-def _ti_looks_like_fqdn(domain: str) -> bool:
-    if not domain or len(domain) > 253:
-        return False
-    if "." not in domain:
-        return False
-    if domain.startswith("-") or domain.endswith("-"):
-        return False
-    return bool(re.fullmatch(r"[a-z0-9.-]+\.[a-z]{2,}", domain))
 
 def _ti_get_registrable_domain(domain: str) -> str:
     d = _ti_normalize_domain(domain)
@@ -621,73 +374,21 @@ def plausible_phishing(domain, brand):
 
 def check_http_alive(domain, timeout=4):
     domain = _ti_normalize_domain(domain)
-    out = {
-        "domain": domain,
-        "status": None,
-        "final_url": None,
-        "class_hint": None,
-        "scheme": None,
-        "dns_ips": [],
-        "peer_ip": None,
-        "server": None,
-        "location": None,
-        "ok": False,
-        "redirect_chain": [],
-    }
-
-    try:
-        infos = socket.getaddrinfo(domain, None)
-        seen_ips = []
-        for item in infos:
-            ip = item[4][0]
-            if ip not in seen_ips:
-                seen_ips.append(ip)
-        out["dns_ips"] = seen_ips[:8]
-    except Exception:
-        out["dns_ips"] = []
-
-    session = requests.Session()
-    headers = {"User-Agent": "Mozilla/5.0"}
-    for scheme in ("https://", "http://"):
+    for scheme in ("http://", "https://"):
         url = scheme + domain
         try:
-            r = session.get(url, timeout=timeout, headers=headers, allow_redirects=True, verify=False, stream=True)
-            out["redirect_chain"] = [resp.url for resp in (list(r.history) + [r]) if getattr(resp, "url", None)]
-            status = int(r.status_code)
-            out["status"] = status
-            out["final_url"] = r.url
-            out["scheme"] = scheme.rstrip(":/")
-            out["server"] = r.headers.get("Server")
-            out["location"] = r.headers.get("Location")
-            out["ok"] = 200 <= status < 400
-            try:
-                conn = getattr(r.raw, "_connection", None)
-                sock = getattr(conn, "sock", None) if conn else None
-                if sock and hasattr(sock, "getpeername"):
-                    peer = sock.getpeername()
-                    if isinstance(peer, tuple) and peer:
-                        out["peer_ip"] = peer[0]
-            except Exception:
-                pass
-            try:
-                r.close()
-            except Exception:
-                pass
-            if out["ok"]:
-                return out
+            r = requests.get(url, timeout=timeout, headers={"User-Agent": "Mozilla/5.0"}, allow_redirects=True)
+            if 200 <= r.status_code < 400:
+                return r.status_code, r.url
         except Exception:
-            continue
-    return out
+            pass
+    return None, None
 
 def classify_final_url(domain: str, final_url: str, brand: str) -> str:
     """
-    active_phishing_candidate
-    redirect_official_clean
-    redirect_official_possible_remediation
-    redirect_official_possible_brand_protection
+    suspicious
+    redirect_to_official
     parking_or_generic
-    likely_partner_or_campaign_site
-    brand_abuse_unclear
     """
     analyzed = _ti_normalize_domain(domain)
     if not final_url:
@@ -696,11 +397,22 @@ def classify_final_url(domain: str, final_url: str, brand: str) -> str:
     parsed = urlparse(final_url.strip())
     final_host = _ti_normalize_domain(parsed.netloc or "")
     final_url_l = final_url.strip().lower()
-    domain_profile = _ti_domain_semantic_profile(analyzed, brand)
-    final_profile = _ti_domain_semantic_profile(final_host, brand) if final_host else {
-        "tokens": set(), "remediation_hits": set(), "partner_hits": set(), "low_signal_hits": set(),
-        "strong_signal": False
-    }
+
+    if final_host == analyzed:
+        generic_markers = [
+            "sedo", "bodis", "dan.com", "afternic", "for-sale",
+            "buy-this-domain", "coming-soon", "parking"
+        ]
+        if any(m in final_url_l for m in generic_markers):
+            return "parking_or_generic"
+        return "suspicious"
+
+    if final_host in OFFICIAL_ROOTS or any(final_host.endswith("." + x) for x in OFFICIAL_ROOTS):
+        return "redirect_to_official"
+    if f"support.{brand}.com" in final_host or final_host == f"www.{brand}.com" or final_host == f"{brand}.com":
+        return "redirect_to_official"
+    if any(s in final_host for s in OFFICIAL_SUBSTRINGS):
+        return "redirect_to_official"
 
     generic_markers = [
         "sedo", "bodis", "dan.com", "afternic", "for-sale",
@@ -709,37 +421,7 @@ def classify_final_url(domain: str, final_url: str, brand: str) -> str:
     if any(m in final_url_l for m in generic_markers):
         return "parking_or_generic"
 
-    if final_host == analyzed:
-        if domain_profile["partner_hits"] and not domain_profile["strong_signal"]:
-            return "likely_partner_or_campaign_site"
-        if domain_profile["low_signal_hits"] and not domain_profile["strong_signal"]:
-            return "brand_abuse_unclear"
-        return "active_phishing_candidate"
-
-    redirects_to_official = (
-        final_host in OFFICIAL_ROOTS
-        or any(final_host.endswith("." + x) for x in OFFICIAL_ROOTS)
-        or f"support.{brand}.com" in final_host
-        or final_host == f"www.{brand}.com"
-        or final_host == f"{brand}.com"
-        or any(s in final_host for s in OFFICIAL_SUBSTRINGS)
-    )
-
-    if redirects_to_official:
-        if domain_profile["partner_hits"] or final_profile.get("partner_hits"):
-            return "redirect_official_clean"
-        if domain_profile["remediation_hits"] or final_profile.get("remediation_hits"):
-            return "redirect_official_possible_remediation"
-        if domain_profile["low_signal_hits"] and not domain_profile["strong_signal"]:
-            return "redirect_official_possible_brand_protection"
-        return "redirect_official_clean"
-
-    if domain_profile["partner_hits"] and not domain_profile["strong_signal"]:
-        return "likely_partner_or_campaign_site"
-    if domain_profile["low_signal_hits"] and not domain_profile["strong_signal"]:
-        return "brand_abuse_unclear"
-
-    return "active_phishing_candidate"
+    return "suspicious"
 
 def favicon_hash(url):
     if not mmh3:
@@ -757,70 +439,467 @@ def favicon_hash(url):
         pass
     return None
 
+
+_campaign_domain_rdap_cache = {}
+_campaign_ip_rdap_cache = {}
+_campaign_http_cache = {}
+
+def _campaign_registrable_domain(domain: str) -> str:
+    return _ti_get_registrable_domain(domain)
+
+
+def _campaign_get_domain_rdap(domain: str):
+    reg = _campaign_registrable_domain(domain)
+    if not reg:
+        return None
+    if reg in _campaign_domain_rdap_cache:
+        return _campaign_domain_rdap_cache[reg]
+    headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+    data = None
+    try:
+        r = requests.get(f"https://rdap.org/domain/{reg}", timeout=15, headers=headers, verify=False)
+        if r.status_code == 200:
+            data = r.json() or {}
+    except Exception:
+        pass
+    _campaign_domain_rdap_cache[reg] = data
+    return data
+
+
+def _campaign_get_ip_rdap(ip: str):
+    if not ip:
+        return None
+    if ip in _campaign_ip_rdap_cache:
+        return _campaign_ip_rdap_cache[ip]
+    data = None
+    try:
+        r = requests.get(f"https://rdap.org/ip/{ip}", timeout=15, headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"}, verify=False)
+        if r.status_code == 200:
+            data = r.json() or {}
+    except Exception:
+        pass
+    _campaign_ip_rdap_cache[ip] = data
+    return data
+
+
+def _campaign_fetch_http(url: str, timeout: int = 12):
+    key = str(url or '')
+    if key in _campaign_http_cache:
+        return _campaign_http_cache[key]
+    out = None
+    try:
+        out = requests.get(url, timeout=timeout, headers={"User-Agent": "Mozilla/5.0"}, allow_redirects=True, verify=False)
+    except Exception:
+        out = None
+    _campaign_http_cache[key] = out
+    return out
+
+
+def _campaign_fetch_favicon_mmh3(url: str):
+    if not mmh3 or not url:
+        return None
+    try:
+        parsed = urlparse(url)
+        if not parsed.scheme or not parsed.netloc:
+            return None
+        fav_url = f"{parsed.scheme}://{parsed.netloc}/favicon.ico"
+        r = requests.get(fav_url, timeout=10, headers={"User-Agent": "Mozilla/5.0"}, allow_redirects=True, verify=False)
+        if r.status_code == 200 and r.content:
+            return mmh3.hash(r.content)
+    except Exception:
+        pass
+    return None
+
+
+def _campaign_fetch_certificate_fingerprint(url: str):
+    try:
+        parsed = urlparse(url or '')
+        if parsed.scheme.lower() != 'https' or not parsed.hostname:
+            return None
+        host = parsed.hostname
+        port = parsed.port or 443
+        pem = ssl.get_server_certificate((host, port))
+        return hashlib.sha256(pem.encode('utf-8', errors='ignore')).hexdigest()[:24]
+    except Exception:
+        return None
+
+
+def _campaign_normalize_title(text: str) -> str:
+    t = (text or '').strip().lower()
+    t = re.sub(r'\s+', ' ', t)
+    t = re.sub(r'\b\d+\b', 'N', t)
+    t = re.sub(r'[0-9a-f]{8,}', 'HEX', t)
+    return t[:300]
+
+
+def _campaign_title_fp(title: str):
+    n = _campaign_normalize_title(title)
+    if not n:
+        return None
+    return hashlib.sha256(n.encode('utf-8')).hexdigest()[:24]
+
+
+def _campaign_path_pattern(url: str):
+    try:
+        p = urlparse(url or '')
+        path = p.path or '/'
+        path = re.sub(r'/+', '/', path.lower())
+        path = re.sub(r'[0-9a-f]{8,}', 'HEX', path)
+        path = re.sub(r'\d+', 'N', path)
+        return path[:250]
+    except Exception:
+        return None
+
+
+def _campaign_input_types_signature(html_text: str):
+    if not html_text:
+        return None
+    vals = re.findall(r'<input[^>]*type=["\']?([^"\'\s>]+)', html_text, flags=re.I)
+    vals = [v.strip().lower() for v in vals if v.strip()]
+    if not vals:
+        return None
+    return '|'.join(sorted(dict.fromkeys(vals)))[:250]
+
+
+def _campaign_form_action_host(html_text: str, base_url: str):
+    if not html_text:
+        return None
+    actions = re.findall(r'<form[^>]*action=["\']([^"\']+)', html_text, flags=re.I)
+    hosts = []
+    for a in actions[:20]:
+        try:
+            joined = requests.compat.urljoin(base_url, a)
+            host = _ti_normalize_domain(urlparse(joined).netloc or '')
+            if host:
+                hosts.append(host)
+        except Exception:
+            pass
+    if not hosts:
+        return None
+    return '|'.join(sorted(dict.fromkeys(hosts)))[:250]
+
+
+def _campaign_redirect_signature(response):
+    if response is None:
+        return None
+    try:
+        chain = [resp.headers.get('Location', '') for resp in (response.history or []) if getattr(resp, 'headers', None)]
+        chain.append(response.url or '')
+        norm = []
+        for u in chain:
+            p = urlparse(u)
+            host = _ti_normalize_domain(p.netloc or '')
+            path = _campaign_path_pattern(u) or '/'
+            if host or path:
+                norm.append(f"{host}{path}")
+        if not norm:
+            return None
+        blob = ' -> '.join(norm)
+        return hashlib.sha256(blob.encode('utf-8')).hexdigest()[:24]
+    except Exception:
+        return None
+
+
+def _campaign_fetch_dom_fingerprint(html_text: str, base_url: str):
+    if not html_text:
+        return None
+    forms = len(re.findall(r'<form\b', html_text, flags=re.I))
+    input_types = _campaign_input_types_signature(html_text) or ''
+    action_hosts = _campaign_form_action_host(html_text, base_url) or ''
+    names = re.findall(r'<input[^>]*name=["\']([^"\']+)', html_text, flags=re.I)
+    names_blob = '|'.join(sorted(dict.fromkeys(x.lower() for x in names[:30])))
+    summary = f"forms:{forms}|inputs:{input_types}|actions:{action_hosts}|names:{names_blob}"
+    return hashlib.sha256(summary.encode('utf-8')).hexdigest()[:24]
+
+
+def _campaign_fetch_dom_layout_fingerprint(html_text: str):
+    if not html_text:
+        return None
+    tags = {
+        'forms': len(re.findall(r'<form\b', html_text, flags=re.I)),
+        'password_inputs': len(re.findall(r'type=["\']password["\']', html_text, flags=re.I)),
+        'text_inputs': len(re.findall(r'type=["\']text["\']', html_text, flags=re.I)),
+        'email_inputs': len(re.findall(r'type=["\']email["\']', html_text, flags=re.I)),
+        'buttons': len(re.findall(r'<button\b', html_text, flags=re.I)) + len(re.findall(r'type=["\']submit["\']', html_text, flags=re.I)),
+        'anchors': len(re.findall(r'<a\b', html_text, flags=re.I)),
+        'scripts': len(re.findall(r'<script\b', html_text, flags=re.I)),
+    }
+    summary = '|'.join(f"{k}:{v}" for k, v in sorted(tags.items()))
+    return hashlib.sha256(summary.encode('utf-8')).hexdigest()[:24]
+
+
+def _campaign_script_src_signature(html_text: str, base_url: str):
+    if not html_text:
+        return None
+    srcs = re.findall(r'<script[^>]*src=["\']([^"\']+)', html_text, flags=re.I)
+    items = []
+    for s in srcs[:40]:
+        try:
+            joined = requests.compat.urljoin(base_url, s)
+            host = _ti_normalize_domain(urlparse(joined).netloc or '')
+            path = _campaign_path_pattern(joined) or '/'
+            if host or path:
+                items.append(f"{host}{path}")
+        except Exception:
+            pass
+    if not items:
+        return None
+    blob = '|'.join(sorted(dict.fromkeys(items)))[:4000]
+    return hashlib.sha256(blob.encode('utf-8')).hexdigest()[:24]
+
+
+def _campaign_link_host_signature(html_text: str, base_url: str):
+    if not html_text:
+        return None
+    hrefs = re.findall(r'<a[^>]*href=["\']([^"\']+)', html_text, flags=re.I)
+    hosts = []
+    for h in hrefs[:60]:
+        try:
+            joined = requests.compat.urljoin(base_url, h)
+            host = _ti_normalize_domain(urlparse(joined).netloc or '')
+            if host:
+                hosts.append(host)
+        except Exception:
+            pass
+    if not hosts:
+        return None
+    blob = '|'.join(sorted(dict.fromkeys(hosts)))[:3000]
+    return hashlib.sha256(blob.encode('utf-8')).hexdigest()[:24]
+
+
+def _campaign_get_nameservers(domain: str):
+    try:
+        data = _campaign_get_domain_rdap(domain) or {}
+        ns = []
+        for obj in data.get('nameservers', []) or []:
+            ldh = str(obj.get('ldhName') or '').strip().lower().rstrip('.')
+            if ldh:
+                ns.append(ldh)
+        if ns:
+            return '|'.join(sorted(dict.fromkeys(ns)))[:500]
+    except Exception:
+        pass
+    try:
+        import dns.resolver
+        answers = dns.resolver.resolve(_campaign_registrable_domain(domain), 'NS')
+        ns = sorted({str(a.target).rstrip('.').lower() for a in answers})
+        if ns:
+            return '|'.join(ns)[:500]
+    except Exception:
+        pass
+    return None
+
+
+def _campaign_get_registrar(domain: str):
+    try:
+        data = _campaign_get_domain_rdap(domain) or {}
+        ents = data.get('entities', []) or []
+        names = []
+        for ent in ents:
+            roles = [str(x).lower() for x in (ent.get('roles') or [])]
+            if 'registrar' not in roles:
+                continue
+            vcard = ent.get('vcardArray') or []
+            if isinstance(vcard, list) and len(vcard) >= 2 and isinstance(vcard[1], list):
+                for item in vcard[1]:
+                    if isinstance(item, list) and item and str(item[0]).lower() == 'fn' and len(item) >= 4:
+                        name = str(item[3]).strip().lower()
+                        if name:
+                            names.append(name)
+        if names:
+            return '|'.join(sorted(dict.fromkeys(names)))[:300]
+    except Exception:
+        pass
+    return None
+
+
+def _campaign_get_cname_chain(domain: str):
+    try:
+        import dns.resolver
+        chain = []
+        current = _ti_normalize_domain(domain)
+        seen = set()
+        for _ in range(5):
+            if not current or current in seen:
+                break
+            seen.add(current)
+            try:
+                ans = dns.resolver.resolve(current, 'CNAME')
+            except Exception:
+                break
+            nxt = None
+            for a in ans:
+                nxt = str(a.target).rstrip('.').lower()
+                break
+            if not nxt:
+                break
+            chain.append(nxt)
+            current = nxt
+        if chain:
+            return '|'.join(chain)[:500]
+    except Exception:
+        pass
+    return None
+
+
+def _campaign_get_asn(ip: str):
+    try:
+        data = _campaign_get_ip_rdap(ip) or {}
+        if data.get('startAutnum'):
+            return f"AS{data.get('startAutnum')}"
+        handle = str(data.get('handle') or '').upper()
+        if handle.startswith('AS'):
+            return handle
+    except Exception:
+        pass
+    return None
+
+
+def _campaign_extract_page_features(domain: str, final_url: str):
+    row = {'domain': _ti_normalize_domain(domain), 'final_url': final_url}
+    parsed = urlparse(final_url or '')
+    row['final_url_host'] = _ti_normalize_domain(parsed.netloc or '') or None
+    row['final_url_path_pattern'] = _campaign_path_pattern(final_url)
+    row['ip'] = None
+    for candidate in [row['final_url_host'], row['domain']]:
+        if candidate:
+            try:
+                row['ip'] = socket.gethostbyname(candidate)
+                if row['ip']:
+                    break
+            except Exception:
+                pass
+    row['favicon_mmh3'] = _campaign_fetch_favicon_mmh3(final_url)
+    row['cert_fp'] = _campaign_fetch_certificate_fingerprint(final_url)
+    row['nameserver'] = _campaign_get_nameservers(row['domain'])
+    row['registrar'] = _campaign_get_registrar(row['domain'])
+    row['cname_chain'] = _campaign_get_cname_chain(row['domain'])
+    row['asn'] = _campaign_get_asn(row['ip'])
+
+    resp = _campaign_fetch_http(final_url)
+    html_text = ''
+    row['server_header'] = None
+    row['redirect_signature'] = None
+    row['title_fp'] = None
+    row['input_types_signature'] = None
+    row['form_action_host'] = None
+    row['html_fp'] = None
+    row['dom_fp'] = None
+    row['layout_fp'] = None
+    row['script_src_signature'] = None
+    row['link_host_signature'] = None
+    if resp is not None and getattr(resp, 'status_code', 0):
+        try:
+            html_text = resp.text or ''
+        except Exception:
+            html_text = ''
+        row['server_header'] = str(resp.headers.get('Server') or '').strip().lower() or None
+        row['redirect_signature'] = _campaign_redirect_signature(resp)
+        m = re.search(r'<title[^>]*>(.*?)</title>', html_text, flags=re.I | re.S)
+        row['title_fp'] = _campaign_title_fp(m.group(1) if m else '')
+        row['input_types_signature'] = _campaign_input_types_signature(html_text)
+        row['form_action_host'] = _campaign_form_action_host(html_text, resp.url)
+        if html_text:
+            normalized = re.sub(r'\s+', ' ', html_text.lower())[:100000]
+            row['html_fp'] = hashlib.sha256(normalized.encode('utf-8', errors='ignore')).hexdigest()[:24]
+        row['dom_fp'] = _campaign_fetch_dom_fingerprint(html_text, resp.url)
+        row['layout_fp'] = _campaign_fetch_dom_layout_fingerprint(html_text)
+        row['script_src_signature'] = _campaign_script_src_signature(html_text, resp.url)
+        row['link_host_signature'] = _campaign_link_host_signature(html_text, resp.url)
+    return row
+
+
+def build_campaign_feature_clusters(live_items):
+    clusters = defaultdict(list)
+    enriched = []
+    feature_order = [
+        ('title_fp', 'title'),
+        ('final_url_host', 'host'),
+        ('final_url_path_pattern', 'path'),
+        ('form_action_host', 'formhost'),
+        ('input_types_signature', 'inputs'),
+        ('server_header', 'server'),
+        ('redirect_signature', 'redirect'),
+        ('cert_fp', 'cert'),
+        ('layout_fp', 'layout'),
+        ('dom_fp', 'dom'),
+        ('script_src_signature', 'scripts'),
+        ('link_host_signature', 'links'),
+        ('asn', 'asn'),
+        ('nameserver', 'ns'),
+        ('registrar', 'registrar'),
+        ('cname_chain', 'cname'),
+        ('ip', 'ip'),
+        ('favicon_mmh3', 'favicon'),
+        ('html_fp', 'html'),
+    ]
+    for item in live_items or []:
+        if isinstance(item, dict):
+            domain = item.get('domain') or ''
+            final_url = item.get('final_url') or ''
+            row = dict(item)
+        else:
+            domain, status, final_url, cls = item
+            row = {'domain': domain, 'status': status, 'final_url': final_url, 'class': cls}
+        row.update(_campaign_extract_page_features(domain, final_url))
+        enriched.append(row)
+        for key, prefix in feature_order:
+            value = row.get(key)
+            if value:
+                clusters[f"{prefix}:{value}"].append(row)
+    clusters = {k: v for k, v in clusters.items() if len(v) >= 2}
+    return enriched, clusters
+
+
 def cluster_infrastructure(domains):
     clusters = defaultdict(list)
-    for item in domains:
-        if isinstance(item, dict):
-            d = _ti_normalize_domain(item.get("domain") or item.get("host") or "")
-            ip = item.get("peer_ip") or ((item.get("dns_ips") or [None])[0])
-        elif isinstance(item, (list, tuple)) and item:
-            d = _ti_normalize_domain(item[0])
+    for d in domains:
+        try:
+            ip = socket.gethostbyname(d)
+        except Exception:
             ip = None
-        else:
-            d = _ti_normalize_domain(str(item or ""))
-            ip = None
-
-        if not d:
-            continue
-        if not ip:
-            try:
-                ip = socket.gethostbyname(d)
-            except Exception:
-                ip = None
         if ip:
-            if d not in clusters[ip]:
-                clusters[ip].append(d)
+            clusters[ip].append(d)
     return clusters
 
-def generate_graph(clusters, outfile="argus_campaign_graph.html"):
+
+def generate_graph(clusters, outfile='argus_campaign_graph.html'):
     if not clusters:
-        print("[ARGUS] No infrastructure data to graph")
+        print('[ARGUS] No infrastructure data to graph')
         return
     if not PYVIS_AVAILABLE:
-        print("[ARGUS] pyvis not installed, skipping graph")
+        print('[ARGUS] pyvis not installed, skipping graph')
         return
-
-    net = Network(height="800px", width="100%", bgcolor="#0e1117", font_color="white")
-    for ip, doms in clusters.items():
-        net.add_node(ip, label=ip, color="red")
-        for d in doms:
-            net.add_node(d, label=d, color="orange")
-            net.add_edge(ip, d)
-
+    net = Network(height='800px', width='100%', bgcolor='#0e1117', font_color='white')
+    color_map = {'ip': 'red', 'favicon': 'purple', 'cert': 'blue', 'html': 'green', 'layout': 'gold', 'title': 'cyan', 'host': 'pink', 'path': 'gray', 'formhost': 'orange', 'inputs': 'lightgreen', 'server': 'brown', 'redirect': 'white', 'dom': 'teal', 'scripts': 'magenta', 'links': 'yellow', 'asn': 'lightblue', 'ns': 'violet', 'registrar': 'salmon', 'cname': 'lightgray'}
+    added = set()
+    for cluster_key, entries in clusters.items():
+        prefix = cluster_key.split(':', 1)[0]
+        color = color_map.get(prefix, 'red')
+        if cluster_key not in added:
+            net.add_node(cluster_key, label=cluster_key, color=color, shape='dot')
+            added.add(cluster_key)
+        for entry in entries:
+            domain = entry['domain'] if isinstance(entry, dict) else str(entry)
+            if domain not in added:
+                net.add_node(domain, label=domain, color='orange')
+                added.add(domain)
+            net.add_edge(cluster_key, domain)
     net.write_html(outfile, open_browser=False)
-    print("[ARGUS] Graph saved:", outfile)
+    print('[ARGUS] Graph saved:', outfile)
+
 
 def argus_campaign_intel(keyword, live_only=False, auto_analyze=False, open_reports=False, dynamic_discovery=True, dynamic_limit=50):
     brand = keyword.strip().lower()
-
     ct_domains = ct_discovery(brand)
     generated = generate_typosquat_candidates(brand)
-
-    dynamic = {
-        "ct_domains": [],
-        "urlscan_domains": [],
-        "combined": [],
-        "filtered": [],
-        "rejected": 0,
-    }
+    dynamic = {'ct_domains': [], 'urlscan_domains': [], 'combined': [], 'filtered': [], 'rejected': 0}
     if dynamic_discovery:
         try:
             dynamic = dynamic_campaign_discovery(brand, limit=dynamic_limit)
         except Exception as e:
             print(f"[ARGUS DYNAMIC] discovery failed: {e}")
-
-    raw = sorted(set(ct_domains) | set(generated) | set(dynamic.get("combined", [])))
-
+    raw = sorted(set(ct_domains) | set(generated) | set(dynamic.get('combined', [])))
     filtered = []
     rejected = 0
     for d in raw:
@@ -829,41 +908,20 @@ def argus_campaign_intel(keyword, live_only=False, auto_analyze=False, open_repo
         else:
             rejected += 1
     filtered = sorted(set(filtered))
-
-    live_results = []
-    suspicious_live = []
-    redirect_live = []
-    parking_live = []
-    context_live = []
-
+    suspicious_live, redirect_live, parking_live = [], [], []
     if live_only:
         print("\n[ARGUS] Probing plausible phishing domains...\n")
         for d in filtered:
-            probe = check_http_alive(d)
-            status = probe.get("status")
-            final_url = probe.get("final_url")
+            status, final_url = check_http_alive(d)
             if status:
                 cls = classify_final_url(d, final_url, brand)
-                item = {
-                    "domain": d,
-                    "status": status,
-                    "final_url": final_url,
-                    "class": cls,
-                    "peer_ip": probe.get("peer_ip"),
-                    "dns_ips": probe.get("dns_ips") or [],
-                    "scheme": probe.get("scheme"),
-                    "redirect_chain": probe.get("redirect_chain") or [],
-                }
-                live_results.append(item)
-                if cls == "active_phishing_candidate":
+                item = (d, status, final_url, cls)
+                if cls == 'suspicious':
                     suspicious_live.append(item)
-                elif cls.startswith("redirect_official"):
+                elif cls == 'redirect_to_official':
                     redirect_live.append(item)
-                elif cls in {"parking_or_generic"}:
-                    parking_live.append(item)
                 else:
-                    context_live.append(item)
-
+                    parking_live.append(item)
     print(f"\n[ARGUS] Raw domains from CT: {len(ct_domains)}")
     print(f"[ARGUS] Dynamic CT/urlscan candidates: {len(dynamic.get('combined', []))}")
     print(f"[ARGUS] Dynamic filtered candidates: {len(dynamic.get('filtered', []))}")
@@ -871,75 +929,53 @@ def argus_campaign_intel(keyword, live_only=False, auto_analyze=False, open_repo
     print(f"[ARGUS] Combined candidates: {len(raw)}")
     print(f"[ARGUS] Rejected as legit/noise: {rejected}")
     print(f"[ARGUS] Plausible phishing domains: {len(filtered)}\n")
-
     if not filtered:
-        print("None found")
+        print('None found')
     else:
         for d in filtered:
-            print(" -", d)
-
-    if dynamic.get("scored"):
+            print(' -', d)
+    if dynamic.get('scored'):
         print("\n[ARGUS] Top dynamic candidates\n")
-        for item in dynamic.get("scored", [])[:15]:
+        for item in dynamic.get('scored', [])[:15]:
             print(f" - {item['domain']} | score={item['score']} | age={item.get('age_days')} | reasons: {', '.join(item.get('reasons', []))}")
-
     if live_only:
         print("\n[ARGUS] Live suspicious domains\n")
-        if not suspicious_live:
-            print("None")
-        else:
-            for item in suspicious_live:
-                ip_note = item.get("peer_ip") or ", ".join(item.get("dns_ips") or []) or "no-ip"
-                print(f" - {item['domain']} [{item['status']}] -> {item['final_url']} | ip={ip_note}")
-
-        print("\n[ARGUS] Redirect to official / remediation / protection\n")
-        if not redirect_live:
-            print("None")
-        else:
-            for item in redirect_live:
-                ip_note = item.get("peer_ip") or ", ".join(item.get("dns_ips") or []) or "no-ip"
-                print(f" - {item['domain']} [{item['status']}] -> {item['final_url']} | {item['class']} | ip={ip_note}")
-
-        print("\n[ARGUS] Brand-context / partner / unclear\n")
-        if not context_live:
-            print("None")
-        else:
-            for item in context_live:
-                ip_note = item.get("peer_ip") or ", ".join(item.get("dns_ips") or []) or "no-ip"
-                print(f" - {item['domain']} [{item['status']}] -> {item['final_url']} | {item['class']} | ip={ip_note}")
-
+        print('None' if not suspicious_live else '\n'.join([f" - {d} [{status}] -> {final_url}" for d, status, final_url, _ in suspicious_live]))
+        print("\n[ARGUS] Redirect to official / likely brand protection\n")
+        print('None' if not redirect_live else '\n'.join([f" - {d} [{status}] -> {final_url}" for d, status, final_url, _ in redirect_live]))
         print("\n[ARGUS] Parking / generic\n")
-        if not parking_live:
-            print("None")
-        else:
-            for item in parking_live:
-                ip_note = item.get("peer_ip") or ", ".join(item.get("dns_ips") or []) or "no-ip"
-                print(f" - {item['domain']} [{item['status']}] -> {item['final_url']} | ip={ip_note}")
-
-    cluster_input = suspicious_live if live_only else filtered
-    clusters = cluster_infrastructure(cluster_input)
-
+        print('None' if not parking_live else '\n'.join([f" - {d} [{status}] -> {final_url}" for d, status, final_url, _ in parking_live]))
+    cluster_input = [d for d, _, _, _ in suspicious_live] if live_only else filtered
+    infra_clusters = cluster_infrastructure(cluster_input)
     print("\n[ARGUS] Infrastructure clusters\n")
-    if not clusters:
-        print("No resolved suspicious domains")
+    if not infra_clusters:
+        print('No resolved suspicious domains')
     else:
-        for ip, doms in clusters.items():
-            print(ip, "->", len(doms), "domains")
+        for ip, doms in infra_clusters.items():
+            print(ip, '->', len(doms), 'domains')
             for d in doms:
-                print("   ", d)
-
+                print('   ', d)
+    campaign_rows, feature_clusters = build_campaign_feature_clusters(suspicious_live if live_only else [])
+    print("\n[ARGUS] Campaign feature clusters\n")
+    if not feature_clusters:
+        print('No reusable campaign features found')
+    else:
+        for cluster_key, rows in sorted(feature_clusters.items(), key=lambda kv: (-len(kv[1]), kv[0])):
+            print(f"{cluster_key} -> {len(rows)} domains")
+            for row in rows:
+                print('   ', row.get('domain'))
+    print("\n[ARGUS] Campaign feature extraction (single-domain)\n")
+    for row in campaign_rows:
+        print(f" - {row.get('domain')} | ip={row.get('ip')} | title_fp={row.get('title_fp')} | host={row.get('final_url_host')} | path={row.get('final_url_path_pattern')} | formhost={row.get('form_action_host')} | inputs={row.get('input_types_signature')} | server={row.get('server_header')} | redirect={row.get('redirect_signature')} | favicon={row.get('favicon_mmh3')} | cert_fp={row.get('cert_fp')} | html_fp={row.get('html_fp')} | dom_fp={row.get('dom_fp')} | layout_fp={row.get('layout_fp')} | scripts={row.get('script_src_signature')} | links={row.get('link_host_signature')} | asn={row.get('asn')} | ns={row.get('nameserver')} | registrar={row.get('registrar')} | cname={row.get('cname_chain')}")
     if live_only and suspicious_live:
         try:
             print("\n[ARGUS] Favicon pivot (first suspicious live)\n")
-            favicon_hash(suspicious_live[0].get("final_url"))
+            favicon_hash(suspicious_live[0][2])
         except Exception:
             pass
-
-    generate_graph(clusters)
-
+    generate_graph(feature_clusters)
     if auto_analyze:
         auto_analyze_suspicious_domains(suspicious_live, open_reports=open_reports)
-
 
 
 def auto_analyze_suspicious_domains(suspicious_live, *, open_reports=False, max_domains=10):
@@ -957,11 +993,7 @@ def auto_analyze_suspicious_domains(suspicious_live, *, open_reports=False, max_
 
     count = 0
     for item in suspicious_live[:max_domains]:
-        if isinstance(item, dict):
-            d = item.get("domain")
-            final_url = item.get("final_url")
-        else:
-            d, status, final_url, _cls = item
+        d, status, final_url, _cls = item
         target_url = final_url or f"http://{d}"
         cmd = [
             sys.executable,
@@ -1555,13 +1587,14 @@ def capture_live_session(url: str, out_png: Path, *, headless: bool, width: int,
     return meta, dom_intel, step2_info
 
 
-def annotate_screenshot(screenshot_png: Path, detections: list[dict], out_png: Path) -> bool:
+def annotate_screenshot(screenshot_png: Path, detections: list[dict], out_png: Path, *, mode: str = "validated") -> bool:
     """
-    Crea un PNG annotato sullo screenshot originale:
-      - rettangolo (bbox)
-      - cerchio centrato sul bbox (utile per evidenziare anche su UI dense)
-      - label + conf
-    Ritorna True se salvato, False se non possibile.
+    Crea un PNG annotato sullo screenshot originale.
+
+    mode:
+      - validated: box verdi/oro per detection validate
+      - raw_preview: box grigie per detection raw non validate
+      - dom_fallback: box azzurre per indicatori ricavati dal DOM
     """
     if not PIL_AVAILABLE:
         return False
@@ -1569,11 +1602,26 @@ def annotate_screenshot(screenshot_png: Path, detections: list[dict], out_png: P
         img = Image.open(screenshot_png).convert("RGBA")
         draw = ImageDraw.Draw(img)
 
-        # font best-effort (evita dipendenze)
         try:
             font = ImageFont.load_default()
         except Exception:
             font = None
+
+        if mode == "validated":
+            bbox_color = (0, 255, 0, 255)
+            circle_color = (255, 215, 0, 255)
+            label_bg = (0, 0, 0, 160)
+            label_fg = (255, 255, 255, 255)
+        elif mode == "raw_preview":
+            bbox_color = (160, 160, 160, 255)
+            circle_color = (210, 210, 210, 255)
+            label_bg = (40, 40, 40, 180)
+            label_fg = (255, 255, 255, 255)
+        else:  # dom_fallback
+            bbox_color = (80, 180, 255, 255)
+            circle_color = (120, 220, 255, 255)
+            label_bg = (10, 50, 90, 180)
+            label_fg = (255, 255, 255, 255)
 
         for d in detections:
             xyxy = d.get("xyxy") or []
@@ -1583,10 +1631,8 @@ def annotate_screenshot(screenshot_png: Path, detections: list[dict], out_png: P
             name = str(d.get("name", "obj"))
             conf = float(d.get("conf", 0.0))
 
-            # bbox
-            draw.rectangle([x1, y1, x2, y2], outline=(0, 255, 0, 255), width=3)
+            draw.rectangle([x1, y1, x2, y2], outline=bbox_color, width=3)
 
-            # circle around bbox center
             cx = (x1 + x2) / 2.0
             cy = (y1 + y2) / 2.0
             w = max(1.0, (x2 - x1))
@@ -1594,15 +1640,13 @@ def annotate_screenshot(screenshot_png: Path, detections: list[dict], out_png: P
             r = max(w, h) / 2.0
             pad = max(6.0, r * 0.08)
             rr = r + pad
-            draw.ellipse([cx - rr, cy - rr, cx + rr, cy + rr], outline=(255, 215, 0, 255), width=3)
+            draw.ellipse([cx - rr, cy - rr, cx + rr, cy + rr], outline=circle_color, width=3)
 
-            # label box
-            label = f"{name} {conf:.2f}"
+            label = f"{name} {conf:.2f}" if conf > 0 else name
             tx = x1
             ty = max(0, y1 - 16)
-            # background for readability
-            draw.rectangle([tx, ty, tx + 8 + 7 * len(label), ty + 16], fill=(0, 0, 0, 160))
-            draw.text((tx + 4, ty + 2), label, fill=(255, 255, 255, 255), font=font)
+            draw.rectangle([tx, ty, tx + 8 + 7 * len(label), ty + 16], fill=label_bg)
+            draw.text((tx + 4, ty + 2), label, fill=label_fg, font=font)
 
         out_png.parent.mkdir(parents=True, exist_ok=True)
         img = img.convert("RGB")
@@ -1610,6 +1654,71 @@ def annotate_screenshot(screenshot_png: Path, detections: list[dict], out_png: P
         return True
     except Exception:
         return False
+
+
+def dom_login_annotation_candidates(dom_intel: dict | None = None) -> list[dict]:
+    """Best-effort fallback annotations ricavate dal DOM quando YOLO non valida nulla."""
+    dom_intel = dom_intel or {}
+    candidates = list(dom_intel.get("semantic_candidates") or [])
+    if not candidates:
+        return []
+
+    out = []
+    seen = set()
+    for cand in candidates:
+        try:
+            tag = str(cand.get("tag") or "").lower()
+            role = str(cand.get("role") or "").lower()
+            ctype = str(cand.get("type") or "").lower()
+            text = " ".join([
+                str(cand.get("text") or ""),
+                str(cand.get("placeholder") or ""),
+                str(cand.get("aria_label") or ""),
+                str(cand.get("name") or ""),
+                str(cand.get("id") or ""),
+                str(cand.get("title") or ""),
+                str(cand.get("value") or ""),
+            ]).lower()
+            x = float(cand.get("x", 0.0))
+            y = float(cand.get("y", 0.0))
+            w = float(cand.get("w", 0.0))
+            h = float(cand.get("h", 0.0))
+            if w < 6 or h < 6:
+                continue
+            name = None
+            score = 0.0
+            if ctype == "password" or "password" in text or "passcode" in text:
+                name = "dom_password_field"
+                score = 0.95
+            elif ctype in {"text", "email"} or any(k in text for k in ["sign in", "login", "email", "username", "account"]):
+                if tag == "input":
+                    name = "dom_username_field"
+                    score = 0.80 if ctype in {"text", "email"} else 0.68
+            elif ctype in {"submit", "button"} or tag == "button" or role == "button" or any(k in text for k in ["sign in", "login", "next", "submit", "continue"]):
+                name = "dom_login_button"
+                score = 0.72
+            elif tag == "form":
+                name = "dom_form"
+                score = 0.60
+            if not name:
+                continue
+            xyxy = [x, y, x + w, y + h]
+            key = (name, round(x,1), round(y,1), round(w,1), round(h,1))
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append({"name": name, "conf": score, "xyxy": xyxy})
+        except Exception:
+            continue
+
+    # Tieni solo combinazioni utili per login-like pages
+    names = {d["name"] for d in out}
+    has_pwd = "dom_password_field" in names
+    has_user = "dom_username_field" in names
+    has_btn = "dom_login_button" in names
+    if has_pwd and (has_user or has_btn):
+        return out[:8]
+    return []
 
 
 def compute_palette(image_path: Path, k: int = 6) -> list[str]:
@@ -2466,6 +2575,134 @@ def semantic_rescore_detections(detections: list[dict], dom_intel: dict | None, 
     kept.sort(key=lambda x: x.get("conf", 0.0), reverse=True)
     return kept, suppressed, info
 
+
+ANNOTATION_CLASS_MIN_CONF = {
+    "login_form": 0.40,
+    "username_field": 0.38,
+    "password_field": 0.38,
+    "login_button": 0.40,
+    "forgot_password_link": 0.42,
+    "remember_me_checkbox": 0.45,
+    "2fa_field": 0.42,
+    "captcha": 0.45,
+}
+
+LOGIN_RELEVANT_CLASSES = {
+    "login_form",
+    "username_field",
+    "password_field",
+    "login_button",
+    "forgot_password_link",
+    "remember_me_checkbox",
+    "2fa_field",
+    "captcha",
+}
+
+
+def _detection_name_set(detections: list[dict]) -> set[str]:
+    out = set()
+    for d in detections or []:
+        name = str(d.get("name", "")).strip().lower()
+        if name:
+            out.add(name)
+    return out
+
+
+def _has_coherent_login_pattern(detections: list[dict], dom_intel: dict | None = None) -> bool:
+    names = _detection_name_set(detections)
+    dom_intel = dom_intel or {}
+    input_types = {str(x).lower() for x in (dom_intel.get("input_types") or [])}
+    dom_has_password = "password" in input_types
+    combos = [
+        {"login_form", "password_field"},
+        {"username_field", "password_field"},
+        {"password_field", "login_button"},
+        {"login_form", "login_button"},
+    ]
+    if any(combo.issubset(names) for combo in combos):
+        return True
+    if dom_has_password and "password_field" in names and ({"username_field", "login_button", "login_form"} & names):
+        return True
+    if dom_has_password and "2fa_field" in names and ({"login_button", "login_form"} & names):
+        return True
+    return False
+
+
+def select_annotation_detections(detections: list[dict], dom_intel: dict | None = None) -> list[dict]:
+    """
+    Sceglie solo le detection da mostrare nell'immagine annotata.
+    Le detection raw di YOLO possono restare utili per il risk engine,
+    ma lo screenshot finale deve mostrare solo segnali validati e coerenti.
+    """
+    dom_intel = dom_intel or {}
+    if not detections:
+        return []
+
+    coherent_login = _has_coherent_login_pattern(detections, dom_intel=dom_intel)
+    selected = []
+
+    for d in detections:
+        name = str(d.get("name", "")).strip().lower()
+        conf = float(d.get("conf", 0.0))
+        sem = d.get("semantic_validation") or {}
+        verdict = str(sem.get("verdict", "")).lower()
+        dom_match = sem.get("dom_match") if isinstance(sem, dict) else None
+        min_conf = float(ANNOTATION_CLASS_MIN_CONF.get(name, 0.50))
+
+        # Mai annotare rumore grafico debole nel report finale.
+        if name in {"security_alert", "suspicious_banner", "fake_certificate"}:
+            continue
+        if name.startswith("logo_"):
+            continue
+
+        # Per classi login-like, serve coerenza di pattern + supporto semantico.
+        if name in LOGIN_RELEVANT_CLASSES:
+            if not coherent_login:
+                continue
+            if conf < min_conf:
+                continue
+            if verdict in {"weak", "unclear"} and not dom_match:
+                continue
+            selected.append(d)
+            continue
+
+        # Fallback molto conservativo per eventuali altre classi future.
+        if conf >= min_conf and verdict in {"confirmed", "supported"}:
+            selected.append(d)
+
+    selected.sort(key=lambda x: x.get("conf", 0.0), reverse=True)
+    return selected
+
+
+
+
+def select_raw_preview_annotation_detections(detections: list[dict], dom_intel: dict | None = None) -> list[dict]:
+    """
+    Fallback grafico molto conservativo quando non esistono detection validate.
+    Mantiene SOLO classi login-centriche e solo se c'è uno schema login plausibile.
+    Esclude sempre loghi, banner e rumore grafico.
+    """
+    dom_intel = dom_intel or {}
+    if not detections:
+        return []
+
+    if not _has_coherent_login_pattern(detections, dom_intel=dom_intel):
+        return []
+
+    allowed = {"login_form", "username_field", "password_field", "login_button", "captcha", "2fa_field"}
+    selected = []
+    for d in detections:
+        name = str(d.get("name", "")).strip().lower()
+        conf = float(d.get("conf", 0.0))
+        if name not in allowed:
+            continue
+        min_conf = float(ANNOTATION_CLASS_MIN_CONF.get(name, 0.50))
+        if conf < min_conf:
+            continue
+        selected.append(d)
+
+    selected.sort(key=lambda x: x.get("conf", 0.0), reverse=True)
+    return selected
 
 def filter_anomalous_detections(detections: list[dict], *, width: int, height: int) -> tuple[list[dict], list[dict]]:
     """
@@ -4295,10 +4532,27 @@ def main():
         print(f"Suppressed semantic false positives: {len(semantic_suppressed)}")
     visual_metrics["semantic_validator"] = semantic_info
 
+    raw_detections = list(detections or [])
+    validated_detections = select_annotation_detections(raw_detections, dom_intel=dom_intel)
+    visual_metrics["raw_detections"] = [
+        {"class": str(d.get("name", "")), "conf": round(float(d.get("conf", 0.0)), 4), "xyxy": d.get("xyxy")}
+        for d in raw_detections
+    ]
+    visual_metrics["validated_detections"] = [
+        {"class": str(d.get("name", "")), "conf": round(float(d.get("conf", 0.0)), 4), "xyxy": d.get("xyxy")}
+        for d in validated_detections
+    ]
+    visual_metrics["annotation_detections"] = [
+        {"class": str(d.get("name", "")), "conf": round(float(d.get("conf", 0.0)), 4)}
+        for d in validated_detections
+    ]
+
     print("\nDetections")
     print("-" * 40)
-    if not detections:
-        print("(no detections)")
+    if not validated_detections:
+        print("(no validated detections)")
+        if raw_detections:
+            print(f"Raw YOLO detections suppressed from final report: {len(raw_detections)}")
         print("\nTip rapidi se ti aspetti detection ma non arrivano:")
         print("  • prova DESKTOP: --width 1366 --height 768")
         print("  • prova fullpage: --fullpage")
@@ -4307,16 +4561,48 @@ def main():
         print("  • se il sito è 'mobile-only' prova 390x844: --width 390 --height 844")
         print("  • se vedi pagina di blocco Cloudflare, è normale che YOLO non veda la UI del phishing.")
     else:
-        for d in detections:
+        for d in validated_detections:
             print(f"{d['name']:<22} {d['conf']:.3f}  {d['xyxy']}")
 
-    if detections:
+    dom_fallback_detections = dom_login_annotation_candidates(dom_intel=dom_intel)
+    visual_metrics["dom_fallback_detections"] = [
+        {"class": str(d.get("name", "")), "conf": round(float(d.get("conf", 0.0)), 4), "xyxy": d.get("xyxy")}
+        for d in dom_fallback_detections
+    ]
+
+    raw_preview_detections = select_raw_preview_annotation_detections(raw_detections, dom_intel=dom_intel)
+    visual_metrics["raw_preview_annotation_detections"] = [
+        {"class": str(d.get("name", "")), "conf": round(float(d.get("conf", 0.0)), 4), "xyxy": d.get("xyxy")}
+        for d in raw_preview_detections
+    ]
+
+    annotation_mode = None
+    if validated_detections:
+        annotation_mode = "validated"
+        annotation_source = validated_detections
+    elif raw_preview_detections:
+        print("No validated detections: generating login-only raw preview annotation")
+        annotation_mode = "raw_preview"
+        annotation_source = raw_preview_detections
+    elif dom_fallback_detections:
+        print("No YOLO detections: generating DOM fallback annotation")
+        annotation_mode = "dom_fallback"
+        annotation_source = dom_fallback_detections
+    else:
+        annotation_source = []
+
+    if annotation_source:
         annotated_tmp = Path(tempfile.gettempdir()) / f"argus_phishradar_annotated_{now_stamp()}.png"
-        ok = annotate_screenshot(tmp_png, detections, annotated_tmp)
+        ok = annotate_screenshot(tmp_png, annotation_source, annotated_tmp, mode=annotation_mode or "validated")
         if not ok:
             annotated_tmp = None
+        else:
+            visual_metrics["annotation_mode"] = annotation_mode
     else:
         annotated_tmp = None
+        visual_metrics["annotation_mode"] = None
+
+    detections = validated_detections
 
     # ----------------------------
     # Metriche visive (palette/hash + confronto opzionale)
