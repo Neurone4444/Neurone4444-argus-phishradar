@@ -1,12 +1,11 @@
 # ARGUS PhishRadar
-
 Visual phishing detection and campaign intelligence engine.
 
 Keywords: phishing detection, threat intelligence, OSINT, phishing infrastructure discovery, brand abuse detection, certificate transparency monitoring
 
-ARGUS PhishRadar is a security research tool designed to analyze suspicious webpages, detect phishing login interfaces, and correlate related phishing infrastructure across multiple domains.
+ARGUS PhishRadar is a security research tool designed to analyze suspicious webpages, detect credential-harvesting interfaces, and identify related phishing infrastructure across multiple domains.
 
-The engine combines visual analysis, DOM intelligence and infrastructure correlation to help security analysts identify credential harvesting pages and uncover related phishing campaigns.
+The engine combines visual analysis, DOM intelligence, and infrastructure correlation to help security analysts investigate phishing pages and uncover broader phishing campaigns.
 
 
 <img width="940" height="620" alt="sdsaadsasdasdasad" src="https://github.com/user-attachments/assets/95870195-d063-443e-b64a-840b84d108e4" />
