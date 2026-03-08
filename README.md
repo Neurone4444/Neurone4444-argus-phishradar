@@ -1,13 +1,15 @@
 # ARGUS PhishRadar
 Visual phishing detection and campaign intelligence engine.
 
-Keywords: phishing detection, threat intelligence, OSINT, phishing infrastructure discovery, brand abuse detection, certificate transparency monitoring
+**Keywords:** phishing detection, threat intelligence, OSINT, phishing infrastructure discovery, brand abuse detection, certificate transparency monitoring
 
-ARGUS PhishRadar is a security research tool designed to analyze suspicious webpages, detect credential-harvesting interfaces, and identify related phishing infrastructure across multiple domains.
+ARGUS PhishRadar is a security research tool designed to analyze suspicious webpages, detect credential-harvesting interfaces, and pivot from a single phishing page to broader phishing infrastructure.
 
-The engine combines visual analysis, DOM intelligence, and infrastructure correlation to help security analysts investigate phishing pages and uncover broader phishing campaigns.
+The engine combines visual analysis, DOM intelligence, brand impersonation detection, campaign feature clustering, and infrastructure correlation to help analysts investigate phishing activity and uncover related domains, reused kits, and campaign patterns.
 
-ARGUS is designed for investigative workflows where a single suspicious page can lead to the discovery of a larger phishing infrastructure.
+ARGUS is built for investigative workflows where a single suspicious URL can lead to the discovery of a wider phishing ecosystem.
+
+Unlike tools that rely only on static blocklists or domain reputation, ARGUS evaluates the page itself: its visual structure, credential collection behavior, impersonated brand signals, and shared campaign artifacts.
 
 <img width="940" height="620" alt="sdsaadsasdasdasad" src="https://github.com/user-attachments/assets/95870195-d063-443e-b64a-840b84d108e4" />
 
@@ -15,79 +17,53 @@ ARGUS is designed for investigative workflows where a single suspicious page can
 
 # Core Capabilities
 
+ARGUS is designed as a multi-layer phishing investigation engine, where each analysis layer contributes evidence for both single-page triage and broader campaign discovery.
+
 ARGUS integrates multiple analysis layers to evaluate suspicious webpages and identify phishing activity.
-
-Visual phishing detection
-
-ARGUS uses a custom YOLO model trained to detect UI components commonly used in phishing pages.
-
-The model focuses on elements typically associated with credential harvesting and authentication flows.
-
-Detected UI components include:
-
-login forms
-
-username fields
-
-password inputs
-
-authentication buttons
-
-security banners
-
-CAPTCHA and verification elements
-
-2FA prompts
-
-Detected elements are rendered on annotated screenshots to support visual investigation.
 
 ## DOM intelligence
 
-ARGUS extracts structural information directly from the page DOM in order to identify potential credential harvesting behavior.
+ARGUS extracts structural information directly from the page DOM to identify potential credential-harvesting behavior.
 
 The analysis includes:
 
-form extraction
+- form extraction
+- input field analysis
+- script inspection
+- link collection
+- form action inspection
 
-input field analysis
+This helps identify suspicious submission endpoints, hidden credential collection behavior, and phishing-oriented page structure.
 
-script inspection
-
-link collection
-
-form action inspection
-
-This helps detect suspicious submission endpoints and hidden credential collection mechanisms.
 
 ## Brand impersonation detection
 
-ARGUS attempts to identify potential brand impersonation scenarios by combining visual signals and domain analysis.
+
+ARGUS attempts to identify brand impersonation by combining visual signals and domain analysis.
 
 The system supports:
 
-CLIP-based brand recognition
+- CLIP-based brand recognition
+- brand/domain mismatch analysis
+- detection of common impersonation targets
 
-brand/domain mismatch analysis
-
-detection of common impersonation targets
-
-Typical impersonation targets include widely abused brands such as Microsoft, Google, PayPal, and other major online services.
+Typical impersonation targets include widely abused brands such as Microsoft, Google, PayPal, Apple, and other major online services.
 
 ## Layout fingerprinting
 
 ARGUS builds a structural fingerprint of the analyzed page based on the position and type of detected UI elements.
 
-The fingerprint captures the layout structure of the page rather than its content.
+The fingerprint captures page layout rather than page text, making it useful for identifying reused phishing templates.
 
 This enables:
 
-detection of reused phishing kits
+- detection of reused phishing kits
+- clustering of visually similar phishing pages
+- comparison of page structure across domains
 
-clustering of visually similar phishing pages
+Layout fingerprints help analysts identify phishing campaigns reusing the same template or interface pattern.
 
-comparison of page structures across domains
-
-Layout fingerprints can help analysts identify phishing campaigns reusing the same template.
+Because phishing kits often reuse interface structure, layout patterns, DOM structure, and other shared artifacts even when text, domains, or assets change, ARGUS can correlate visually or structurally related phishing pages across otherwise different hosts.
 
 ## OCR-assisted semantic validation (optional)
 
@@ -95,47 +71,45 @@ OCR can be used to extract text from detected UI elements and reduce visual fals
 
 When enabled, OCR allows ARGUS to:
 
-extract text from login fields and interface elements
-
-validate detected UI components
-
-improve semantic understanding of page content
+- extract text from login fields and interface elements
+- validate detected UI components
+- improve semantic understanding of page content
 
 OCR is optional and ARGUS can operate normally without it.
 
+
 ## Phishing campaign discovery
 
-ARGUS includes a campaign discovery module capable of identifying suspicious domains targeting a specific brand.
+ARGUS includes a campaign discovery module that identifies suspicious domains targeting a specific brand.
 
 The discovery engine performs:
 
-typosquat domain generation
-
-discovery of domains from Certificate Transparency logs
-
-discovery of domains observed in public scanning platforms
-
-HTTP probing of candidate domains
+- typosquat domain generation
+- discovery of domains from Certificate Transparency logs
+- discovery of domains observed in public scanning platforms
+- HTTP probing of candidate domains
 
 Suspicious domains can then be automatically analyzed using the visual detection engine.
 
 
-
 # Example Detection
 
-ARGUS performs phishing analysis without relying exclusively on domain reputation lists or blocklists.
+ARGUS does not depend exclusively on reputation feeds, allowlists, or blocklists.
 
-Instead the engine evaluates multiple signals, including:
+Instead, it evaluates suspicious webpages using multiple layers of evidence, including visual phishing signals, credential-oriented DOM behavior, brand impersonation indicators, and cross-domain infrastructure relationships.
 
-visual structure of the page
+This allows ARGUS to surface suspicious phishing pages and related infrastructure even when they have not yet been classified by traditional detection sources.
 
-DOM layout and credential inputs
+Instead of relying only on whether a domain is already known, ARGUS evaluates signals such as:
 
-brand impersonation indicators
+- visual page structure
+- DOM layout and credential inputs
+- form submission behavior
+- brand impersonation indicators
+- infrastructure relationships between domains
+- shared layout or campaign artifacts
 
-infrastructure relationships between domains
-
-This allows ARGUS to detect previously unseen phishing pages and identify suspicious infrastructure before it appears in traditional blocklists.
+This makes ARGUS useful for identifying previously unseen phishing pages, suspicious brand-abuse domains, and related infrastructure before they appear in traditional reputation sources.
 
 <img width="1569" height="914" alt="afsdfdffsdfsfdsfdfdf" src="https://github.com/user-attachments/assets/5ac154cb-c1ee-4044-9b2b-03840504dcbd" />
 
@@ -148,23 +122,18 @@ This allows ARGUS to detect previously unseen phishing pages and identify suspic
 
 The custom YOLO model used by ARGUS is trained to detect phishing-related interface components.
 
+The visual detection layer is intended to support phishing analysis at the page level, helping analysts identify authentication-oriented interfaces, reused phishing layouts, and suspicious credential collection patterns directly from rendered webpages.
+
 Detected elements include:
 
-login forms
-
-username fields
-
-password inputs
-
-authentication buttons
-
-brand logos
-
-CAPTCHA elements
-
-two-factor authentication prompts
-
-security warning banners
+- login forms
+- username fields
+- password inputs
+- authentication buttons
+- brand logos
+- CAPTCHA elements
+- two-factor authentication prompts
+- security warning banners
 
 Detected components are rendered directly on annotated screenshots to assist manual investigation.
 
@@ -262,6 +231,8 @@ python argus_phishradar.py --campaign-intel paypal --live-only
 
 
 <img width="1279" height="790" alt="fadsfffdsfdssdfsfdsf" src="https://github.com/user-attachments/assets/6fd63ddc-774f-439d-8017-cfbaa235c6d8" />
+
+<img width="1476" height="806" alt="hfhjfjfjfjfjfjfjhfjj" src="https://github.com/user-attachments/assets/6e040c51-4b65-4755-ae5f-f51596cccf95" />
 
 ### Dynamic Candidate Ranking
 
